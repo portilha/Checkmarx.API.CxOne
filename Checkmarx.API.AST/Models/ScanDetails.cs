@@ -2,7 +2,6 @@
 using Checkmarx.API.AST.Services;
 using Checkmarx.API.AST.Services.Configuration;
 using Checkmarx.API.AST.Services.KicsResults;
-using Checkmarx.API.AST.Services.ResultsOverview;
 using Checkmarx.API.AST.Services.ResultsSummary;
 using Checkmarx.API.AST.Services.SASTMetadata;
 using Checkmarx.API.AST.Services.SASTResults;
@@ -11,8 +10,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Text;
-using ApiException = Checkmarx.API.AST.Services.Configuration.ApiException;
 
 namespace Checkmarx.API.AST.Models
 {
@@ -272,10 +269,12 @@ namespace Checkmarx.API.AST.Models
             model.MediumToVerify = sastResults.Where(x => x.Severity == ResultsSeverity.MEDIUM && x.State == ResultsState.TO_VERIFY).Count();
             model.LowToVerify = sastResults.Where(x => x.Severity == ResultsSeverity.LOW && x.State == ResultsState.TO_VERIFY).Count();
 
-            model.ToVerify = sastResults.Where(x => x.State == ResultsState.TO_VERIFY).Count();
-            model.NotExploitableMarked = sastResults.Where(x => x.State == ResultsState.NOT_EXPLOITABLE).Count();
-            model.PNEMarked = sastResults.Where(x => x.State == ResultsState.PROPOSED_NOT_EXPLOITABLE).Count();
-            model.OtherStates = sastResults.Where(x =>
+            var resultsExcludingInfo = results.Where(x => x.Severity != ResultsSeverity.INFO);
+
+            model.ToVerify = resultsExcludingInfo.Where(x => x.State == ResultsState.TO_VERIFY).Count();
+            model.NotExploitableMarked = resultsExcludingInfo.Where(x => x.State == ResultsState.NOT_EXPLOITABLE).Count();
+            model.PNEMarked = resultsExcludingInfo.Where(x => x.State == ResultsState.PROPOSED_NOT_EXPLOITABLE).Count();
+            model.OtherStates = resultsExcludingInfo.Where(x =>
                                                         x.State != ResultsState.CONFIRMED &&
                                                         x.State != ResultsState.URGENT &&
                                                         x.State != ResultsState.NOT_EXPLOITABLE &&
@@ -352,16 +351,7 @@ namespace Checkmarx.API.AST.Models
                 };
 
                 if (_scaResults.Successful)
-                {
-                    try
-                    {
-                        updateScaScanResultDetailsBasedOnResultsSummary(_scaResults, ResultsSummary);
-                    }
-                    catch (Exception)
-                    {
-                        updateSCAScanResultDetailsBasedOnSCAVulnerabilities(_scaResults, _scan.ProjectId, Id);
-                    }
-                }
+                    updateScaScanResultDetailsBasedOnResultsSummary(_scaResults);
 
                 return _scaResults;
             }
@@ -385,61 +375,23 @@ namespace Checkmarx.API.AST.Models
 
         }
 
-
-        private void updateSCAScanResultDetailsBasedOnSCAVulnerabilities(ScanResultDetails model, Guid projId, Guid scanId)
+        private void updateScaScanResultDetailsBasedOnResultsSummary(ScanResultDetails model)
         {
-            // When it is a scan with only SCA engine and 0 results, for some reason other APIs returns null in the sca scan status and results
-            // This is the only one i found that returns something
-            var resultsOverview = _client.ResultsOverview.ProjectsAsync(new List<Guid>() { projId }).Result;
-            if (resultsOverview != null)
-            {
-                var resultOverview = resultsOverview.FirstOrDefault();
-                if (resultOverview != null && resultOverview.scaCounters != null)
-                {
-                    if (resultOverview.scaCounters.severityCounters != null && resultOverview.scaCounters.severityCounters.Any())
-                    {
-                        model.Critical = resultOverview.scaCounters.severityCounters.Where(x => x.Severity.ToUpper() == "CRITICAL").Sum(x => x.Counter);
-                        model.High = resultOverview.scaCounters.severityCounters.Where(x => x.Severity.ToUpper() == "HIGH").Sum(x => x.Counter);
-                        model.Medium = resultOverview.scaCounters.severityCounters.Where(x => x.Severity.ToUpper() == "MEDIUM").Sum(x => x.Counter);
-                        model.Low = resultOverview.scaCounters.severityCounters.Where(x => x.Severity.ToUpper() == "LOW").Sum(x => x.Counter);
-                        model.Info = resultOverview.scaCounters.severityCounters.Where(x => x.Severity.ToUpper() == "INFO").Sum(x => x.Counter);
-                    }
-                    else
-                    {
-                        model.Critical = 0;
-                        model.High = 0;
-                        model.Medium = 0;
-                        model.Low = 0;
-                        model.Info = 0;
-                    }
-
-                    if (resultOverview.scaCounters.state != null && resultOverview.scaCounters.state.Any())
-                        model.ToVerify = resultOverview.scaCounters.state.Where(x => x.state.ToUpper() == "TO_VERIFY").Sum(x => x.counter);
-                    else
-                        model.ToVerify = 0;
-
-                    model.Total = resultOverview.scaCounters.totalCounter;
-                }
-            }
-        }
-
-        private void updateScaScanResultDetailsBasedOnResultsSummary(ScanResultDetails model, ResultsSummary resultsSummary)
-        {
-            if (resultsSummary == null)
-            {
+            var scaResults = SCAVulnerabilities;
+            if (scaResults == null)
                 return;
-            }
 
-            var scaCounters = resultsSummary.ScaCounters;
+            var results = SCAVulnerabilities.Where(x => x.RiskState != VulnerabilityStatus.NotExploitable);
 
-            model.Id = new Guid(resultsSummary.ScanId);
-            model.Critical = scaCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.CRITICAL).Sum(x => x.Counter);
-            model.High = scaCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.HIGH).Sum(x => x.Counter);
-            model.Medium = scaCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.MEDIUM).Sum(x => x.Counter);
-            model.Low = scaCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.LOW).Sum(x => x.Counter);
-            model.Info = scaCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.INFO).Sum(x => x.Counter);
-            model.ToVerify = scaCounters.StateCounters.Where(x => x.State == ResultsSummaryState.TO_VERIFY).Sum(x => x.Counter);
-            model.Total = scaCounters.TotalCounter;
+            model.Total = results.Count();
+            model.Critical = results.Where(x => x.Severity.ToUpper() == Services.KicsResults.SeverityEnum.CRITICAL.ToString()).Count();
+            model.High = results.Where(x => x.Severity.ToUpper() == Services.KicsResults.SeverityEnum.HIGH.ToString()).Count();
+            model.Medium = results.Where(x => x.Severity.ToUpper() == Services.KicsResults.SeverityEnum.MEDIUM.ToString()).Count();
+            model.Low = results.Where(x => x.Severity.ToUpper() == Services.KicsResults.SeverityEnum.LOW.ToString()).Count();
+            model.Info = results.Where(x => x.Severity.ToUpper() == Services.KicsResults.SeverityEnum.INFO.ToString()).Count();
+
+            model.ToVerify = results.Where(x => x.RiskState == VulnerabilityStatus.ToVerify &&
+                                                x.Severity.ToUpper() != Services.KicsResults.SeverityEnum.INFO.ToString()).Count();
         }
 
         #endregion
@@ -470,22 +422,11 @@ namespace Checkmarx.API.AST.Models
                 };
 
                 if (_kicsResults.Successful)
-                {
-                    try
-                    {
-                        updateKicsScanResultDetailsBasedOnResultsSummary(_kicsResults, ResultsSummary);
-                    }
-                    catch (Exception)
-                    {
-                        updateKicsScanResultDetailsBasedOnKicsVulnerabilities(_kicsResults, Id);
-                    }
-                }
+                    updateKicsScanResultDetailsBasedOnKicsVulnerabilities(_kicsResults, Id);
 
                 return _kicsResults;
             }
         }
-
-
 
         private void updateKicsScanResultDetailsBasedOnKicsVulnerabilities(ScanResultDetails model, Guid scanId)
         {
@@ -504,26 +445,7 @@ namespace Checkmarx.API.AST.Models
             model.Medium = results.Where(x => x.Severity == Services.KicsResults.SeverityEnum.MEDIUM).Count();
             model.Low = results.Where(x => x.Severity == Services.KicsResults.SeverityEnum.LOW).Count();
             model.Info = results.Where(x => x.Severity == Services.KicsResults.SeverityEnum.INFO).Count();
-            model.ToVerify = kicsResults.Where(x => x.State == KicsStateEnum.TO_VERIFY).Count();
-        }
-
-        private void updateKicsScanResultDetailsBasedOnResultsSummary(ScanResultDetails model, ResultsSummary resultsSummary)
-        {
-            if (resultsSummary == null)
-            {
-                return;
-            }
-
-            var kicsCounters = resultsSummary.KicsCounters;
-
-            model.Id = new Guid(resultsSummary.ScanId);
-            model.Critical = kicsCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.CRITICAL).Sum(x => x.Counter);
-            model.High = kicsCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.HIGH).Sum(x => x.Counter);
-            model.Medium = kicsCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.MEDIUM).Sum(x => x.Counter);
-            model.Low = kicsCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.LOW).Sum(x => x.Counter);
-            model.Info = kicsCounters.SeverityCounters.Where(x => x.Severity == Services.ResultsSummary.SeverityEnum.INFO).Sum(x => x.Counter);
-            model.ToVerify = kicsCounters.StateCounters.Where(x => x.State == ResultsSummaryState.TO_VERIFY).Sum(x => x.Counter);
-            model.Total = kicsCounters.TotalCounter;
+            model.ToVerify = kicsResults.Where(x => x.State == KicsStateEnum.TO_VERIFY && x.Severity != Services.KicsResults.SeverityEnum.INFO).Count();
         }
 
         #endregion

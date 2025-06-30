@@ -115,6 +115,59 @@ namespace Checkmarx.API.AST.Tests
         }
 
         [TestMethod]
+        public void LastScanByEngineTest()
+        {
+            var projects = astclient.GetAllProjectsDetails();
+
+            var project = projects.SingleOrDefault(x => x.Name == "learning-central-admin-center");
+
+            var lastSastScan = astclient.GetLastScan(project.Id, scanType: Enums.ScanTypeEnum.sast);
+            if (lastSastScan != null)
+            {
+                var scanDetails = astclient.GetScanDetails(lastSastScan.Id);
+                var sastResults = scanDetails.SASTResults;
+                if (sastResults != null)
+                {
+                    Trace.WriteLine($"Project {project.Name}: SAST Scan Status - {sastResults.Status} | Scan Results - {sastResults.Critical ?? 0} Criticals, {sastResults.High ?? 0} Highs, {sastResults.Medium ?? 0} Mediums, {sastResults.Low ?? 0} Lows");
+                }
+                else
+                {
+                    Trace.WriteLine($"Project {project.Name} has no SAST results.");
+                }
+            }
+
+            var lastScaScan = astclient.GetLastScan(project.Id, scanType: Enums.ScanTypeEnum.sca);
+            if (lastScaScan != null)
+            {
+                var scanDetails = astclient.GetScanDetails(lastScaScan.Id);
+                var scaResults = scanDetails.ScaResults;
+                if (scaResults != null)
+                {
+                    Trace.WriteLine($"Project {project.Name}: SCA Scan Status - {scaResults.Status} | Scan Results - {scaResults.Critical ?? 0} Criticals, {scaResults.High ?? 0} Highs, {scaResults.Medium ?? 0} Mediums, {scaResults.Low ?? 0} Lows");
+                }
+                else
+                {
+                    Trace.WriteLine($"Project {project.Name} has no SCA results.");
+                }
+            }
+
+            var lastIacScan = astclient.GetLastScan(project.Id, scanType: Enums.ScanTypeEnum.kics);
+            if (lastIacScan != null)
+            {
+                var scanDetails = astclient.GetScanDetails(lastIacScan.Id);
+                var iacResults = scanDetails.KicsResults;
+                if (iacResults != null)
+                {
+                    Trace.WriteLine($"Project {project.Name}: IAC Scan Status - {iacResults.Status} | Scan Results - {iacResults.Critical ?? 0} Criticals, {iacResults.High ?? 0} Highs, {iacResults.Medium ?? 0} Mediums, {iacResults.Low ?? 0} Lows");
+                }
+                else
+                {
+                    Trace.WriteLine($"Project {project.Name} has no SCA results.");
+                }
+            }
+        }
+
+        [TestMethod]
         public void DeleteProjectsTest()
         {
             var projects = astclient.GetAllProjectsDetails();
@@ -247,7 +300,7 @@ namespace Checkmarx.API.AST.Tests
             var properties = typeof(Services.KicsResults.KicsResult).GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.GetProperty);
 
             // Fields
-            Trace.WriteLine(string.Join(";", properties.Select(p => "\"" + p.Name +"\"")));
+            Trace.WriteLine(string.Join(";", properties.Select(p => "\"" + p.Name + "\"")));
 
             var listOfIaCResults = astclient.GetKicsScanResultsById(lastKicsScan.Id);
 
@@ -592,7 +645,7 @@ namespace Checkmarx.API.AST.Tests
             //foreach (var project in astclient.GetAllProjectsDetails())
             //{
             foreach (var scan in astclient.GetScans(new Guid("905bbcd2-8d40-416b-b237-0bbb99201c65")))
-                {
+            {
                 var tasks = astclient.Scans.WorkflowAsync(scan.Id).Result;
 
                 var scanStartedAt = tasks.Single(x => x.Info == "Scan Running").Timestamp;
@@ -604,7 +657,7 @@ namespace Checkmarx.API.AST.Tests
                 //}
             }
         }
-        
+
 
 
         [TestMethod]
@@ -661,7 +714,7 @@ namespace Checkmarx.API.AST.Tests
 
             foreach (var item in search)
             {
-                Trace.WriteLine(item.Id + " "+ item.Branch + " " + item.CreatedAt.DateTime.ToString());
+                Trace.WriteLine(item.Id + " " + item.Branch + " " + item.CreatedAt.DateTime.ToString());
 
                 var previousScan = astclient.GetLastScan(item.ProjectId, branch: item.Branch, completed: true, maxScanDate: item.CreatedAt.DateTime.Add(TimeSpan.FromSeconds(-1)));
 
