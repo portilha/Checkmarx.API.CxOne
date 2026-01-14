@@ -23,7 +23,10 @@ namespace Checkmarx.API.AST.Services
     using Checkmarx.API.AST.Services.KicsResults;
     using Newtonsoft.Json;
     using System;
+    using System.Collections.Generic;
     using System.Linq;
+    using System.Threading;
+    using System.Threading.Tasks;
     using static Checkmarx.API.AST.ASTClient;
     using System = global::System;
 
@@ -202,6 +205,75 @@ namespace Checkmarx.API.AST.Services
             }), authorization, accept, correlationId, cancellationToken);
         }
 
+        // Workaround after a change the DEV team made to the UpdateAsync where multiple predicates for the same (ProjectId, SimilarityId) will throw an error.
+        // This method splits the input into batches where only unique (ProjectId, SimilarityId) are sent together.
+        // The rest are being sent in bulk in order to optimize the number of calls.
+        public virtual async Task UpdateAsync(
+            IEnumerable<POSTPredicate> body,
+            string authorization = null,
+            string accept = null,
+            Guid? correlationId = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (body == null)
+                throw new ArgumentNullException(nameof(body));
+
+            var items = body.ToList();
+
+            // Count occurrences per (ProjectId, SimilarityId)
+            var counts = items
+                .GroupBy(x => new { x.ProjectId, x.SimilarityId })
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var batch = new List<POSTPredicate>();
+
+            foreach (var item in items)
+            {
+                var key = new { item.ProjectId, item.SimilarityId };
+
+                if (counts[key] == 1)
+                {
+                    // Safe to batch
+                    batch.Add(item);
+                }
+                else
+                {
+                    // Must be sent alone and in order
+                    // Flush any pending batch first
+                    if (batch.Count > 0)
+                    {
+                        await updateAsync(
+                            batch,
+                            authorization,
+                            accept,
+                            correlationId,
+                            cancellationToken);
+
+                        batch.Clear();
+                    }
+
+                    // Single-item call (order preserved)
+                    await updateAsync(
+                        new[] { item },
+                        authorization,
+                        accept,
+                        correlationId,
+                        cancellationToken);
+                }
+            }
+
+            // Flush remaining batch
+            if (batch.Count > 0)
+            {
+                await updateAsync(
+                    batch,
+                    authorization,
+                    accept,
+                    correlationId,
+                    cancellationToken);
+            }
+        }
+
         /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
         /// <summary>
         /// predicate Severity and State by Similiarty ID and Project ID
@@ -214,7 +286,7 @@ namespace Checkmarx.API.AST.Services
         /// <param name="correlationId">correlation id to keep track of a flow if many APIs are involved</param>
         /// <returns>successful operation</returns>
         /// <exception cref="ApiException">A server side error occurred.</exception>
-        public virtual async System.Threading.Tasks.Task UpdateAsync(System.Collections.Generic.IEnumerable<POSTPredicate> body, string authorization = null, string accept = null, System.Guid? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        private async System.Threading.Tasks.Task updateAsync(System.Collections.Generic.IEnumerable<POSTPredicate> body, string authorization = null, string accept = null, System.Guid? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var client_ = _httpClient;
             var disposeClient_ = false;
