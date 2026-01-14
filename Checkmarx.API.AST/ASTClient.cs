@@ -133,6 +133,8 @@ namespace Checkmarx.API.AST
                                 .WaitAndRetryAsync(10, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
                                 (exception, timeSpan, retryCount, context) =>
                                 {
+                                    
+
                                     // Optional: Log the retry attempt
                                     Console.WriteLine($"Retry {retryCount} after {timeSpan.TotalSeconds} seconds due to: " +
                                         $"{(exception.Exception != null ? exception.Exception.Message : $"{(int?)exception.Result?.StatusCode} {exception.Result?.ReasonPhrase}")}");
@@ -1345,7 +1347,7 @@ namespace Checkmarx.API.AST
                 var scans = GetScans(projectId, scanType.ToString(), completed, branch, ScanRetrieveKind.All, maxScanDate);
                 if (fullScanOnly)
                 {
-                    var fullScans = scans.Where(x => IsScanIncremental(x.Id)).OrderByDescending(x => x.CreatedAt);
+                    var fullScans = scans.Where(x => !IsScanIncremental(x.Id)).OrderByDescending(x => x.CreatedAt);
 
                     if (fullScans.Any())
                         return fullScans.FirstOrDefault();
