@@ -22,6 +22,7 @@
 
 namespace Checkmarx.API.AST.Services.Analytics
 {
+    using Checkmarx.API.AST.Exceptions;
     using Checkmarx.API.AST.Models;
     using Checkmarx.API.AST.Utils;
     using Newtonsoft.Json;
