@@ -78,11 +78,11 @@ namespace Checkmarx.API.AST.Tests
             Assert.IsNotNull(originalPreset);
             Assert.IsNotNull(targetPreset);
 
-            astclient.PresetManagement.UpdatePresetAsync(targetPreset.Id, new Preset
+            astclient.PresetManagement.UpdatePresetAsync(Scanner.Sast, Convert.ToInt32(targetPreset.Id), new WritePreset
             {
                 Name = targetPreset.Name,
                 Description = originalPreset.Description?.Substring(0, 60),
-                QueryIds = originalPreset.QueryIds // Example query ID
+                QueriesByFamily = originalPreset.QueriesByFamily // Example query ID
             }).Wait();
         }
 
@@ -111,11 +111,11 @@ namespace Checkmarx.API.AST.Tests
 
                 if (!presets.Any(x => x.Name == name))
                 {
-                    astclient.PresetManagement.CreatePresetAsync(new Preset
+                    astclient.PresetManagement.CreatePresetAsync(Scanner.Sast, new WritePreset
                     {
                         Name = name,
                         Description = preset.Description?.Substring(0, 60),
-                        QueryIds = preset.QueryIds
+                        QueriesByFamily = preset.QueriesByFamily
                     }).Wait();
                     break;
                 }

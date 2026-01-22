@@ -46,7 +46,7 @@ namespace Checkmarx.API.AST.Tests
                     Trace.WriteLine($"{property.Name} = {property.GetValue(item)?.ToString()}");
                 }
 
-                foreach (var queryId in item.QueryIds)
+                foreach (var queryId in PresetManagement.GetAllQueryIdsFromPreset(item))
                 {
                     Trace.WriteLine($"\t{queryId}");
                 }

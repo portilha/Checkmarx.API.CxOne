@@ -133,7 +133,7 @@ namespace Checkmarx.API.AST
                                 .WaitAndRetryAsync(10, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
                                 (exception, timeSpan, retryCount, context) =>
                                 {
-                                    
+
 
                                     // Optional: Log the retry attempt
                                     Console.WriteLine($"Retry {retryCount} after {timeSpan.TotalSeconds} seconds due to: " +
@@ -567,11 +567,22 @@ namespace Checkmarx.API.AST
             get
             {
                 if (Connected && _presetManagement == null)
-                    _presetManagement = new PresetManagement($"{ASTServer.AbsoluteUri}api/presets", _httpClient);
-
-
+                    _presetManagement = new PresetManagement($"{ASTServer.AbsoluteUri}api/preset-manager", _httpClient);
 
                 return _presetManagement;
+            }
+        }
+
+        private SastQueriesAuditPresets _auditPresetManagement;
+
+        public SastQueriesAuditPresets AuditPresetManagement
+        {
+            get
+            {
+                if (Connected && _auditPresetManagement == null)
+                    _auditPresetManagement = new SastQueriesAuditPresets($"{ASTServer.AbsoluteUri}api/presets", _httpClient);
+
+                return _auditPresetManagement;
             }
         }
 
@@ -1143,7 +1154,7 @@ namespace Checkmarx.API.AST
         {
             if (scanId == Guid.Empty)
                 throw new ArgumentNullException(nameof(scanId));
-            
+
             int page = 0;
             int limit = 500;
 
@@ -2315,9 +2326,9 @@ namespace Checkmarx.API.AST
 
         public IEnumerable<PresetDetails> GetCustomPresetsDetails()
         {
-            foreach (var preset in GetAllPresets().Where(x => x.Custom))
+            foreach (var preset in GetAllPresets().Where(x => x.Custom == true))
             {
-                yield return PresetManagement.GetPresetById(preset.Id).Result;
+                yield return PresetManagement.GetPresetById(Scanner.Sast, preset.Id).Result;
             }
         }
 
@@ -2325,7 +2336,7 @@ namespace Checkmarx.API.AST
         {
             foreach (var preset in GetAllPresets())
             {
-                yield return PresetManagement.GetPresetById(preset.Id).Result;
+                yield return PresetManagement.GetPresetById(Scanner.Sast, preset.Id).Result;
             }
         }
 
@@ -2334,14 +2345,14 @@ namespace Checkmarx.API.AST
             if (limit <= 0)
                 throw new ArgumentOutOfRangeException(nameof(limit));
 
-            var listPresets = PresetManagement.GetPresetsAsync(limit).Result;
+            var listPresets = PresetManagement.GetPresetsAsync(Scanner.Sast, limit, include_details: true).Result;
             if (listPresets.TotalCount > limit)
             {
                 var offset = limit;
                 bool cont = true;
                 do
                 {
-                    var next = PresetManagement.GetPresetsAsync(limit, offset).Result;
+                    var next = PresetManagement.GetPresetsAsync(Scanner.Sast, limit, offset, include_details: true).Result;
                     if (next.Presets.Any())
                     {
                         next.Presets.ToList().ForEach(o => listPresets.Presets.Add(o));
@@ -2772,7 +2783,7 @@ namespace Checkmarx.API.AST
         /// <param name="scanId">Scan Id</param>
         /// <returns></returns>
         /// <exception cref="ArgumentNullException"></exception>
-        public IEnumerable<QueriesTree> GetProjectScanQueryNodes(Guid projectId, Guid scanId)
+        public IEnumerable<Checkmarx.API.AST.Services.QueryEditor.QueriesTree> GetProjectScanQueryNodes(Guid projectId, Guid scanId)
         {
             if (projectId == Guid.Empty)
                 throw new ArgumentNullException(nameof(projectId));
@@ -2950,13 +2961,13 @@ namespace Checkmarx.API.AST
         private QueryResponse getQueryByLanguageAndName(Guid session, string language, string queryName)
         {
             var projectQueries = QueryEditor.GetQueriesAsync(session, includeMetadata: true).Result;
-            var possibleQueriyToOverride = QueriesTree.FilterTreeByQueryName(projectQueries, queryName)
+            var possibleQueriyToOverride = Checkmarx.API.AST.Services.QueryEditor.QueriesTree.FilterTreeByQueryName(projectQueries, queryName)
                                                 .SingleOrDefault(x => x.Title.ToLower() == language.ToLower());
 
             if (possibleQueriyToOverride == null)
                 return null;
 
-            QueriesTree selectedNode = null;
+            Checkmarx.API.AST.Services.QueryEditor.QueriesTree selectedNode = null;
             if (possibleQueriyToOverride.Children.Any(x => x.Title == Query_Level_Project))
                 selectedNode = possibleQueriyToOverride.Children.Single(x => x.Title == Query_Level_Project);
             else if (possibleQueriyToOverride.Children.Any(x => x.Title == Query_Level_Tenant))
