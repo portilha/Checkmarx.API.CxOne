@@ -21,6 +21,7 @@ namespace Checkmarx.API.AST.Services.Projects
     using System.Threading.Tasks;
     using System = global::System;
     using static Checkmarx.API.AST.ASTClient;
+    using Checkmarx.API.AST.Converters;
 
     [System.CodeDom.Compiler.GeneratedCode("NSwag", "13.15.10.0 (NJsonSchema v10.6.10.0 (Newtonsoft.Json v12.0.0.0))")]
     public partial class Projects
@@ -1261,6 +1262,7 @@ namespace Checkmarx.API.AST.Services.Projects
         /// The groups authorized for this project
         /// </summary>
         [Newtonsoft.Json.JsonProperty("groups", Required = Newtonsoft.Json.Required.AllowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        [Newtonsoft.Json.JsonConverter(typeof(SafeGuidListConverter))]
         public System.Collections.Generic.ICollection<Guid> Groups { get; set; }
 
         /// <summary>
@@ -1337,6 +1339,7 @@ namespace Checkmarx.API.AST.Services.Projects
         /// The groups authorized for this project
         /// </summary>
         [Newtonsoft.Json.JsonProperty("groups", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        [Newtonsoft.Json.JsonConverter(typeof(SafeGuidListConverter))]
         public System.Collections.Generic.ICollection<Guid> Groups { get; set; }
 
         /// <summary>
