@@ -28,6 +28,7 @@ using Newtonsoft.Json.Linq;
 using Polly;
 using Polly.Extensions.Http;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
@@ -1399,7 +1400,7 @@ namespace Checkmarx.API.AST
             return GetScans(projectId, SAST_Engine, true, branch, ScanRetrieveKind.Locked).FirstOrDefault();
         }
 
-        private Dictionary<Guid, ScanInfo> _sastScansMetada = new Dictionary<Guid, ScanInfo>();
+        private ConcurrentDictionary<Guid, ScanInfo> _sastScansMetada = new ConcurrentDictionary<Guid, ScanInfo>();
 
         /// <summary>
         /// Get list of scans, filtered by engine, completion  and scankind
@@ -3333,13 +3334,13 @@ namespace Checkmarx.API.AST
                     if (results.Scans != null)
                     {
                         foreach (var item in results.Scans)
-                            _sastScansMetada.Add(item.ScanId, item);
+                            _sastScansMetada.AddOrUpdate(item.ScanId, item, (x,y) => y);
                     }
 
                     if (results.Missing != null)
                     {
                         foreach (var item in results.Missing)
-                            _sastScansMetada.Add(item, null);
+                            _sastScansMetada.AddOrUpdate((Guid)item, null as ScanInfo, (x, y) => y);
                     }
                 }
             }

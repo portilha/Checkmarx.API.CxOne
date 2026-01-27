@@ -551,14 +551,21 @@ namespace Checkmarx.API.AST.Models
             if (!_scan.Engines.Contains(scanType.ToString()))
                 throw new ArgumentException($"{scanType} did not ran in this Scan");
 
-            var value = _scan.StatusDetails.Single(x => x.Name == scanType.ToString()).Duration;
+            Checkmarx.API.AST.Services.Scans.StatusDetails status = _scan.StatusDetails.SingleOrDefault(x => x.Name == scanType.ToString());
+
+            TimeSpan value = TimeSpan.Zero;
+            if (status != null)
+                value = status.Duration;
 
             if (value == TimeSpan.Zero)
                 _scan = _client.Scans.GetScanAsync(Id).Result;
 
-            value = _scan.StatusDetails.Single(x => x.Name == scanType.ToString()).Duration;
+            status = _scan.StatusDetails.SingleOrDefault(x => x.Name == scanType.ToString());
 
-            return value;
+            if (status != null)
+                return status.Duration;
+
+            return TimeSpan.Zero;
         }
     }
 }
