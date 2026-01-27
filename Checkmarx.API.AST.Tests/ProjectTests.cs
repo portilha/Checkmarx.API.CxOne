@@ -340,5 +340,13 @@ namespace Checkmarx.API.AST.Tests
         {
             astclient.SetProjectConfig(new Guid("4bceceba-3be8-4ef6-b822-c7fee658fbf8"), ASTClient.FastScanConfiguration, null);
         }
+
+        [TestMethod]
+        public void GetProjectTest()
+        {
+            var project = astclient.GetProject(new Guid("d52fc4cf-b785-4297-93bd-03a7a30ec156"));
+
+            Trace.WriteLine($"Name: {project.Name} | Groups: {string.Join(", ", project.Groups)}");
+        }
     }
 }
