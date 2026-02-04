@@ -21,6 +21,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 
 namespace Checkmarx.API.AST.Tests
 {
@@ -59,6 +60,36 @@ namespace Checkmarx.API.AST.Tests
                 Configuration["ClientSecret"]);
             }
 
+        }
+
+        [TestMethod]
+        public async Task CompareSASTScanResultsTest()
+        {
+            Guid baseScanId = new Guid("f3fbec50-0c2f-46d2-be6f-60297679279a");
+            //Guid baseScanId = new Guid("08ea7e30-ee36-4bef-b4a0-5dfaa777fb15");
+            Guid scanId = new Guid("1817f832-860c-456f-b425-98b59c246268");
+            //Guid scanId = new Guid("bf9e22c5-71b4-4464-aa78-59e77f15b35a");
+
+            var baseScan = astClient.GetScanDetails(baseScanId);
+            var scan = astClient.GetScanDetails(scanId);
+
+            try
+            {
+                var resultsCompare = astClient.GetScanResultsCompare(baseScan.Id, scan.Id);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"Results Compare error: {ex.Message}");
+            }
+
+            try
+            {
+                var sastScanCompare = astClient.GetSASTScanCompareResultsByScans(baseScan.Id, scan.Id).ToList();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"Sast Scan Compare error: {ex.Message}");
+            }
         }
 
         [TestMethod]

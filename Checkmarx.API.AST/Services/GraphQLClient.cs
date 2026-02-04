@@ -1,4 +1,5 @@
-﻿using Checkmarx.API.AST.Exceptions;
+﻿using Checkmarx.API.AST.Errors;
+using Checkmarx.API.AST.Exceptions;
 using Checkmarx.API.AST.Models.SCA;
 using Newtonsoft.Json;
 using System;
