@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 
 namespace Checkmarx.API.AST.Services
 {
+    using Checkmarx.API.AST.Errors;
     using Checkmarx.API.AST.Exceptions;
     using Checkmarx.API.AST.Models;
     using System.Net.Mail;
