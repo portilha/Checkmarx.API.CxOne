@@ -2,6 +2,7 @@
 using Checkmarx.API.AST.Models.SCA;
 using Checkmarx.API.AST.Services.Configuration;
 using Checkmarx.API.AST.Services.KicsResults;
+using Checkmarx.API.AST.Services.Projects;
 using Checkmarx.API.AST.Services.ResultsSummary;
 using Checkmarx.API.AST.Services.SASTMetadata;
 using Checkmarx.API.AST.Services.SASTResults;
@@ -566,6 +567,14 @@ namespace Checkmarx.API.AST.Models
                 return status.Duration;
 
             return TimeSpan.Zero;
+        }
+
+        public Uri GetSASTResultLink(SASTResult result)
+        {
+            if (result == null)
+                throw new ArgumentNullException(nameof(result));
+
+            return new Uri(_client.ASTServer, $"/sast-results/{ProjectId}/{Id}?resultId={result.ResultHash}");
         }
     }
 }
