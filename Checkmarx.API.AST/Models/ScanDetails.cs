@@ -254,6 +254,14 @@ namespace Checkmarx.API.AST.Models
             }
         }
 
+        public Uri GetSASTResultLink(SASTResult result)
+        {
+            if (result == null)
+                throw new ArgumentNullException(nameof(result));
+
+            return new Uri(_client.ASTServer, $"/sast-results/{ProjectId}/{Id}?resultId={Uri.EscapeDataString(result.ResultHash)}");
+        }
+
         #endregion
 
         #region SCA
@@ -569,12 +577,6 @@ namespace Checkmarx.API.AST.Models
             return TimeSpan.Zero;
         }
 
-        public Uri GetSASTResultLink(SASTResult result)
-        {
-            if (result == null)
-                throw new ArgumentNullException(nameof(result));
 
-            return new Uri(_client.ASTServer, $"/sast-results/{ProjectId}/{Id}?resultId={Uri.EscapeDataString(result.ResultHash)}");
-        }
     }
 }
