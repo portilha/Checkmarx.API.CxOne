@@ -574,7 +574,7 @@ namespace Checkmarx.API.AST.Models
             if (result == null)
                 throw new ArgumentNullException(nameof(result));
 
-            return new Uri(_client.ASTServer, $"/sast-results/{ProjectId}/{Id}?resultId={result.ResultHash}");
+            return new Uri(_client.ASTServer, $"/sast-results/{ProjectId}/{Id}?resultId={Uri.EscapeDataString(result.ResultHash)}");
         }
     }
 }
