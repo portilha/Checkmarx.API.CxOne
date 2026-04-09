@@ -1,6 +1,7 @@
 using Checkmarx.API.AST.Enums;
 using Checkmarx.API.AST.Models;
 using Checkmarx.API.AST.Services.Configuration;
+using Checkmarx.API.AST.Services.Projects;
 using Checkmarx.API.AST.Services.SASTResults;
 using Checkmarx.API.AST.Services.SASTScanResultsCompare;
 using Checkmarx.API.AST.Services.Scans;
@@ -112,6 +113,9 @@ namespace Checkmarx.API.AST.Tests
             var lastScan = astclient.GetLastScan(project.Id);
 
             var automatedScanDetails = astclient.GetScanDetails(lastScan.Id);
+
+
+
         }
 
         [TestMethod]
@@ -333,7 +337,7 @@ namespace Checkmarx.API.AST.Tests
             {
                 var results = astclient.GetScannersResultsById(new Guid("9283f360-85c7-4d66-9469-ed4e471550ba"), [item]);
 
-                Trace.WriteLine(item + " = " + results.Count()); 
+                Trace.WriteLine(item + " = " + results.Count());
             }
 
         }
@@ -341,7 +345,7 @@ namespace Checkmarx.API.AST.Tests
         [TestMethod]
         public void GetCriticalScannerResultsTest()
         {
-            var results = astclient.GetScannersResultsById(new Guid("9283f360-85c7-4d66-9469-ed4e471550ba"), 
+            var results = astclient.GetScannersResultsById(new Guid("9283f360-85c7-4d66-9469-ed4e471550ba"),
                 [Services.ScannersResults.SeverityEnum.CRITICAL]);
 
             Assert.IsTrue(results.Any(static x => x.Severity == Checkmarx.API.AST.Services.ScannersResults.SeverityEnum.CRITICAL));
@@ -387,9 +391,11 @@ namespace Checkmarx.API.AST.Tests
         {
             Assert.IsNotNull(astclient);
 
-            var proj = astclient.Projects.GetProjectAsync(new Guid("049b1439-34b1-498b-bae1-c767652fcbc0")).Result;
+            var proj = astclient.Projects.GetProjectAsync(new Guid("61039804-3d8f-4efa-8f42-86ec9c253010")).Result;
 
-            var lastSASTScan = astclient.GetLastScan(proj.Id, true, scanType: Enums.ScanTypeEnum.sast);
+            var lastSASTScan = astclient.GetAllScans(proj.Id);
+
+            Assert.Contains(new Guid("ce7bb6be-ffd7-48fa-b9dc-ff288ba9a19c"), lastSASTScan.Select(x => x.Id));
 
             Assert.IsNotNull(lastSASTScan);
         }
@@ -948,5 +954,22 @@ namespace Checkmarx.API.AST.Tests
         }
 
 
+        [TestMethod]
+        public void ListScanSASTVersionTest()
+        {
+            var project = astclient.GetAllProjectsDetails().Single(x => x.Name == "bmrvilela/Checkmarx.API.AST");
+
+            foreach (var item in astclient.GetScans(project.Id, ASTClient.SAST_Engine, sastEngineVersion: "9.7.3"))
+            {
+                var result = astclient.GetScanDetails(item);
+
+                Trace.WriteLine($"{result.Id} - {result.FinishedOn} - {result.EngineVersion}");
+            }
+
+
+            var lastScan = astclient.GetScanDetails(astclient.GetLastScan(project.Id, engineVersion: "9.7.3"));
+
+            Trace.WriteLine($"LS: {lastScan.Id} - {lastScan.FinishedOn} - {lastScan.EngineVersion}");
+        }
     }
 }

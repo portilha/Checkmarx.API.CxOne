@@ -20,7 +20,7 @@ namespace Checkmarx.API.AST.Tests
 
         private static ASTClient astclient;
 
-        private static Guid projectId = new Guid("440a6404-f79d-4e50-8407-64be5d6d299a");
+        private static Guid projectId = new Guid("61039804-3d8f-4efa-8f42-86ec9c253010");
 
         [ClassInitialize]
         public static void InitializeTest(TestContext testContext)

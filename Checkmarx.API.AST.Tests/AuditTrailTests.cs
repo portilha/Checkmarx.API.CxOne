@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
 namespace Checkmarx.API.AST.Tests
@@ -50,12 +51,11 @@ namespace Checkmarx.API.AST.Tests
         [TestMethod]
         public void GetAuditTrailtTest()
         {
-
-            var auditEvents = astclient.GetAllAuditEvents("2025-09-01", "2025-09-15");
+            var auditEvents = astclient.GetAllAuditEvents(new DateTime(2026, 01, 01), new DateTime(2026, 04, 03));
 
             foreach (var auditEvent in auditEvents)
             {
-                Trace.WriteLine(auditEvent.EventType + " " + auditEvent.ActionUserId);
+                Trace.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(auditEvent));
             }
 
         }

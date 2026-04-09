@@ -19,6 +19,7 @@ namespace Checkmarx.API.AST.Services.Audit
     using Checkmarx.API.AST.Exceptions;
     using System = global::System;
     using static Checkmarx.API.AST.ASTClient;
+    using System;
 
     [System.CodeDom.Compiler.GeneratedCode("NSwag", "13.15.10.0 (NJsonSchema v10.6.10.0 (Newtonsoft.Json v12.0.0.0))")]
     public partial class AuditTrail
@@ -70,17 +71,21 @@ namespace Checkmarx.API.AST.Services.Audit
         /// <param name="to">End date for the event filter in `YYYY-MM-DD` format. Must be the same or later than the `from` date.</param>
         /// <returns>Successfully retrieved audit events or download links</returns>
         /// <exception cref="ApiException">A server side error occurred.</exception>
-        public virtual async System.Threading.Tasks.Task<AuditEvents> GetAuditEventsAsync(string from = null, string to = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        public virtual async System.Threading.Tasks.Task<AuditEvents> GetAuditEventsAsync(DateTime from, DateTime to, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var urlBuilder_ = new System.Text.StringBuilder();
             urlBuilder_.Append(BaseUrl != null ? BaseUrl.TrimEnd('/') : "").Append("/?");
             if (from != null)
             {
-                urlBuilder_.Append(System.Uri.EscapeDataString("from") + "=").Append(System.Uri.EscapeDataString(ConvertToString(from, System.Globalization.CultureInfo.InvariantCulture))).Append("&");
+                urlBuilder_.Append(System.Uri.EscapeDataString("from") + "=")
+                    .Append(System.Uri.EscapeDataString(from.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)))
+                    .Append("&");
             }
             if (to != null)
             {
-                urlBuilder_.Append(System.Uri.EscapeDataString("to") + "=").Append(System.Uri.EscapeDataString(ConvertToString(to, System.Globalization.CultureInfo.InvariantCulture))).Append("&");
+                urlBuilder_.Append(System.Uri.EscapeDataString("to") + "=")
+                    .Append(System.Uri.EscapeDataString(to.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)))
+                    .Append("&");
             }
             urlBuilder_.Length--;
 
@@ -441,7 +446,7 @@ namespace Checkmarx.API.AST.Services.Audit
         /// <summary>
         /// Additional context or metadata associated with the event
         /// </summary>
-        [Newtonsoft.Json.JsonProperty("data", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        [Newtonsoft.Json.JsonProperty("data", Required = Newtonsoft.Json.Required.AllowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
         public object Data { get; set; }
 
         private System.Collections.Generic.IDictionary<string, object> _additionalProperties = new System.Collections.Generic.Dictionary<string, object>();

@@ -912,7 +912,7 @@ namespace Checkmarx.API.AST
         /// <param name="from">Start date in YYYY-MM-DD format. Cannot be more than 365 days in the past.</param>
         /// <param name="to">End date in YYYY-MM-DD format.</param>
         /// <returns>Combined list of all audit events from both the inline response and every archive link.</returns>
-        public IList<Services.Audit.AuditEvent> GetAllAuditEvents(string from = null, string to = null)
+        public IList<Services.Audit.AuditEvent> GetAllAuditEvents(DateTime from, DateTime to)
         {
             var result = Audit.GetAuditEventsAsync(from, to).Result;
             var allEvents = new List<Services.Audit.AuditEvent>();
