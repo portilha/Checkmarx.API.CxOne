@@ -252,7 +252,7 @@ namespace Checkmarx.API.AST.Tests
                 astClient.MarkKICSResult(ProjectId,
                     vuln.SimilarityID,
                     vuln.Severity,
-                    GetRandomEnumMember<KicsStateEnum>(),
+                    GetRandomEnumMember<KicsStateEnum>().ToString(),
                     GetRandomJoke());
             }
         }
