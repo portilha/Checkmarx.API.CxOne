@@ -91,7 +91,7 @@ namespace Checkmarx.API.AST
         {
             // We don’t want HttpClient controlling timeouts — we want Polly to control them
             // We are just adding a big timeout just as a safety net in case Polly somehow fails to cancel
-            Timeout = TimeSpan.FromMinutes(5)
+            Timeout = TimeSpan.FromMinutes(10)
         };
 
         internal static readonly IAsyncPolicy<HttpResponseMessage> _retryPolicy = createPolicy();
