@@ -28,6 +28,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Polly;
 using Polly.Extensions.Http;
+using Polly.Timeout;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -38,7 +39,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Threading.Tasks;
 
 namespace Checkmarx.API.AST
@@ -60,7 +60,101 @@ namespace Checkmarx.API.AST
         public string ClientId { get; set; }
         public string ClientSecret { get; set; }
 
-        private readonly HttpClient _httpClient = new HttpClient();
+        public const string SettingsAPISecuritySwaggerFolderFileFilter = "scan.config.apisec.swaggerFilter";
+        public const string SettingsProjectRepoUrl = "scan.handler.git.repository";
+        public const string SettingsProjectExclusions = "scan.config.sast.filter";
+        public const string SettingsProjectConfiguration = "scan.config.sast.languageMode";
+        public const string SettingsProjectPreset = "scan.config.sast.presetName";
+        public const string FastScanConfiguration = "scan.config.sast.fastScanMode";
+        public const string RecommendedExclusionsConfiguration = "scan.config.sast.recommendedExclusions";
+        public const string IsIncrementalConfiguration = "scan.config.sast.incremental";
+
+        public const string SAST_Engine = "sast";
+        public const string SCA_Engine = "sca";
+        public const string KICS_Engine = "kics";
+        public const string API_Security_Engine = "apisec";
+        public const string SCA_Container_Engine = "sca-container";
+
+        public const string Query_Level_Cx = "Cx";
+        public const string Query_Level_Tenant = "Tenant";
+        public const string Query_Level_Project = "Project";
+
+        public const string Feature_Flag_CustomStatesEnabled = "CUSTOM_STATES_ENABLED";
+
+        private const string Claim_License = "ast-license";
+
+        private readonly static string CompletedStage = Checkmarx.API.AST.Services.Scans.Status.Completed.ToString();
+
+        #region HttpClient and Policies
+
+        private readonly HttpClient _httpClient = new HttpClient()
+        {
+            // We don’t want HttpClient controlling timeouts — we want Polly to control them
+            // We are just adding a big timeout just as a safety net in case Polly somehow fails to cancel
+            Timeout = TimeSpan.FromMinutes(10)
+        };
+
+        internal static readonly IAsyncPolicy<HttpResponseMessage> _retryPolicy = createPolicy();
+
+        private static IAsyncPolicy<HttpResponseMessage> createPolicy()
+        {
+            var timeouts = new[]
+            {
+                TimeSpan.FromSeconds(60),
+                TimeSpan.FromSeconds(120),
+                TimeSpan.FromSeconds(240)
+            };
+
+            const string TimeoutAttemptKey = "TimeoutAttempt";
+
+            // Inner timeout policy: reads the attempt number from Context
+            var timeoutPolicy = Policy.TimeoutAsync<HttpResponseMessage>(
+                context =>
+                {
+                    int attempt = context.TryGetValue(TimeoutAttemptKey, out var val) ? (int)val : 0;
+                    return timeouts[Math.Min(attempt, timeouts.Length - 1)];
+                },
+                TimeoutStrategy.Pessimistic
+            );
+
+            // Timeout retry policy: increments the attempt in Context, wraps the timeout policy
+            var timeoutRetryPolicy = Policy<HttpResponseMessage>
+                .Handle<TimeoutRejectedException>()
+                .RetryAsync(
+                    timeouts.Length - 1, // 2 retries = 3 total attempts
+                    (outcome, retryCount, context) =>
+                    {
+                        // Increment the per-execution attempt counter
+                        int current = context.TryGetValue(TimeoutAttemptKey, out var val) ? (int)val : 0;
+                        context[TimeoutAttemptKey] = current + 1;
+
+                        TimeSpan nextTimeout = timeouts[Math.Min(current + 1, timeouts.Length - 1)];
+                        Console.WriteLine(
+                            $"Timeout retry {retryCount}/{timeouts.Length - 1} — " +
+                            $"next timeout: {nextTimeout.TotalSeconds}s. " +
+                            $"Reason: {outcome.Exception?.Message ?? "unknown"}");
+                    });
+
+            // Existing transient/429 retry policy (unchanged)
+            var transientRetryPolicy = HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .OrResult(r => r.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                .WaitAndRetryAsync(
+                    10,
+                    retryAttempt =>
+                        TimeSpan.FromSeconds(Math.Min(Math.Pow(2, retryAttempt), 30)) +
+                        TimeSpan.FromMilliseconds(Random.Shared.Next(0, 1000)),
+                    (outcome, timeSpan, retryCount, context) =>
+                    {
+                        Console.WriteLine(
+                            $"Transient retry {retryCount}/10 after {timeSpan.TotalSeconds:F1}s. " +
+                            $"Reason: {(outcome.Exception != null ? outcome.Exception.Message : $"{(int?)outcome.Result?.StatusCode} {outcome.Result?.ReasonPhrase}")}");
+                    });
+
+            // Wrap order matters:
+            // transientRetryPolicy (outermost) → timeoutRetryPolicy → timeoutPolicy (innermost)
+            return Policy.WrapAsync(transientRetryPolicy, timeoutRetryPolicy, timeoutPolicy);
+        }
 
         // Helper method to clone HttpRequestMessage
         public static HttpRequestMessage CloneHttpRequestMessage(HttpRequestMessage request)
@@ -129,45 +223,7 @@ namespace Checkmarx.API.AST
             }
         }
 
-        internal static readonly IAsyncPolicy<HttpResponseMessage> _retryPolicy = HttpPolicyExtensions
-                                .HandleTransientHttpError()
-                                .OrResult(response => response.StatusCode == System.Net.HttpStatusCode.TooManyRequests) // Specifically handle 429
-                                .WaitAndRetryAsync(10, retryAttempt =>
-                                    TimeSpan.FromSeconds(Math.Min(Math.Pow(2, retryAttempt), 30))
-                                    + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 1000)),
-                                (exception, timeSpan, retryCount, context) =>
-                                {
-
-
-                                    // Optional: Log the retry attempt
-                                    Console.WriteLine($"Retry {retryCount} after {timeSpan.TotalSeconds} seconds due to: " +
-                                        $"{(exception.Exception != null ? exception.Exception.Message : $"{(int?)exception.Result?.StatusCode} {exception.Result?.ReasonPhrase}")}");
-                                });
-
-        public const string SettingsAPISecuritySwaggerFolderFileFilter = "scan.config.apisec.swaggerFilter";
-        public const string SettingsProjectRepoUrl = "scan.handler.git.repository";
-        public const string SettingsProjectExclusions = "scan.config.sast.filter";
-        public const string SettingsProjectConfiguration = "scan.config.sast.languageMode";
-        public const string SettingsProjectPreset = "scan.config.sast.presetName";
-        public const string FastScanConfiguration = "scan.config.sast.fastScanMode";
-        public const string RecommendedExclusionsConfiguration = "scan.config.sast.recommendedExclusions";
-        public const string IsIncrementalConfiguration = "scan.config.sast.incremental";
-
-        public const string SAST_Engine = "sast";
-        public const string SCA_Engine = "sca";
-        public const string KICS_Engine = "kics";
-        public const string API_Security_Engine = "apisec";
-        public const string SCA_Container_Engine = "sca-container";
-
-        public const string Query_Level_Cx = "Cx";
-        public const string Query_Level_Tenant = "Tenant";
-        public const string Query_Level_Project = "Project";
-
-        public const string Feature_Flag_CustomStatesEnabled = "CUSTOM_STATES_ENABLED";
-
-        private const string Claim_License = "ast-license";
-
-        private readonly static string CompletedStage = Checkmarx.API.AST.Services.Scans.Status.Completed.ToString();
+        #endregion
 
         #region Services
 
