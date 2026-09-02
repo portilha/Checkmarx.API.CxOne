@@ -84,23 +84,6 @@ namespace Checkmarx.API.AST
         public const string Query_Level_Application = "Application";
         public const string Query_Level_Project = "Project";
 
-        // Tenant-wide limit is 5 concurrent sessions (shared with UI users). 3 is safe for automation.
-        // Keyed per tenant (not one global gate) — a process juggling multiple ASTClient instances
-        // (e.g. a migration's source + target tenant) must not have them fight over the same budget;
-        // each tenant has its own independent 5-slot cap on the server.
-        private const int _maxConcurrentQuerySessions = 3;
-        private static readonly ConcurrentDictionary<string, SemaphoreSlim> _querySessionGates = new ConcurrentDictionary<string, SemaphoreSlim>();
-        private static readonly TimeSpan _querySessionAcquireTimeout = TimeSpan.FromMinutes(10);
-
-        private SemaphoreSlim querySessionGate =>
-            _querySessionGates.GetOrAdd($"{ASTServer}|{Tenant}", _ => new SemaphoreSlim(_maxConcurrentQuerySessions, _maxConcurrentQuerySessions));
-
-        // There is no server-side endpoint left to pre-check session availability (the legacy
-        // cx-audit /sessions endpoint has been decommissioned), so contention from other
-        // users/processes on the tenant can only be detected by a failed session creation.
-        private const int _querySessionCreateMaxAttempts = 3;
-        private static readonly TimeSpan _querySessionCreateRetryDelay = TimeSpan.FromSeconds(30);
-
         public const string Feature_Flag_CustomStatesEnabled = "CUSTOM_STATES_ENABLED";
 
         private const string Claim_License = "ast-license";
@@ -109,7 +92,28 @@ namespace Checkmarx.API.AST
 
         #region HttpClient and Policies
 
-        private readonly HttpClient _httpClient = new HttpClient(new SocketsHttpHandler
+        // Which request the shared _retryPolicy below is currently retrying — every generated
+        // Services/*.cs client sends through _httpClient, so RequestDescriptionHandler (wrapped around
+        // its inner SocketsHttpHandler) sees every one of those requests generically, with no need to
+        // touch 40+ generated files individually the way QueryEditorClient's own dedicated policy does
+        // (that one also needed request-body access and level of control specific to sessions, which
+        // is why it stayed separate rather than folding into this same mechanism).
+        // AsyncLocal, not a plain field: each concurrent call gets its own value with no cross-talk,
+        // and a set doesn't leak back up to the caller once the request completes.
+        internal static readonly AsyncLocal<string> _currentRequestDescription = new AsyncLocal<string>();
+
+        private sealed class RequestDescriptionHandler : DelegatingHandler
+        {
+            public RequestDescriptionHandler(HttpMessageHandler innerHandler) : base(innerHandler) { }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                _currentRequestDescription.Value = $"{request.Method} {request.RequestUri}";
+                return base.SendAsync(request, cancellationToken);
+            }
+        }
+
+        private readonly HttpClient _httpClient = new HttpClient(new RequestDescriptionHandler(new SocketsHttpHandler
         {
             // Proactively recycle pooled connections instead of holding them open indefinitely.
             // Long-running exports (many hours) were hitting "connection forcibly closed by remote
@@ -117,7 +121,7 @@ namespace Checkmarx.API.AST
             // connections the pool still thought were alive.
             PooledConnectionLifetime = TimeSpan.FromMinutes(3),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1)
-        })
+        }))
         {
             // We don’t want HttpClient controlling timeouts — we want Polly to control them
             // We are just adding a big timeout just as a safety net in case Polly somehow fails to cancel
@@ -176,9 +180,11 @@ namespace Checkmarx.API.AST
                         TimeSpan.FromMilliseconds(Random.Shared.Next(0, 1000)),
                     (outcome, timeSpan, retryCount, context) =>
                     {
+                        string requestDescription = _currentRequestDescription.Value;
                         Console.WriteLine(
                             $"Transient retry {retryCount}/10 after {timeSpan.TotalSeconds:F1}s. " +
-                            $"Reason: {(outcome.Exception != null ? outcome.Exception.Message : $"{(int?)outcome.Result?.StatusCode} {outcome.Result?.ReasonPhrase}")}");
+                            $"Reason: {(outcome.Exception != null ? outcome.Exception.Message : $"{(int?)outcome.Result?.StatusCode} {outcome.Result?.ReasonPhrase}")}" +
+                            (string.IsNullOrEmpty(requestDescription) ? "" : $" | {requestDescription}"));
                     });
 
             // Wrap order matters:
@@ -785,18 +791,12 @@ namespace Checkmarx.API.AST
             }
         }
 
-        private QueryEditor _queryEditor;
-
-        public QueryEditor QueryEditor
-        {
-            get
-            {
-                if (Connected && _queryEditor == null)
-                    _queryEditor = new QueryEditor($"{ASTServer.AbsoluteUri}api/query-editor", _httpClient);
-
-                return _queryEditor;
-            }
-        }
+        // Session-based query CRUD lives in QueryEditorClient (Services/QueryEditorClient.cs) — it owns
+        // the query editor service client itself, along with the session lifecycle and its own retry
+        // policy. Lazily constructed the same way the other per-service properties above are, since it
+        // needs _httpClient (only available once this instance exists).
+        private QueryEditorClient _queryEditorClient;
+        private QueryEditorClient queryEditorClient => _queryEditorClient ??= new QueryEditorClient(this, _httpClient);
 
         private Webhooks _webhooks;
         public Webhooks Webhooks
@@ -2793,6 +2793,37 @@ namespace Checkmarx.API.AST
         #region Queries
 
         /// <summary>
+        /// Result of a single query read/create/override attempt made as part of a batch.
+        /// </summary>
+        public class QueryBatchResult
+        {
+            public string Language { get; set; }
+            public string QueryName { get; set; }
+            public bool Success { get; set; }
+            public string ErrorMessage { get; set; }
+            public string Source { get; set; }
+        }
+
+        public class TenantQueryUpsert
+        {
+            public string Language { get; set; }
+            public string QueryName { get; set; }
+            public string QuerySource { get; set; }
+
+            /// <summary>Required only when the query does not exist yet at Cx or Tenant level.</summary>
+            public string Group { get; set; }
+            public string Severity { get; set; }
+            public bool? IsExecutable { get; set; }
+        }
+
+        public class ProjectQueryUpsert
+        {
+            public string Language { get; set; }
+            public string QueryName { get; set; }
+            public string QuerySource { get; set; }
+        }
+
+        /// <summary>
         /// Retrieves every query defined anywhere in the tenant — Cx, Tenant, Project and
         /// Application level, all correctly resolved.
         ///
@@ -2801,16 +2832,16 @@ namespace Checkmarx.API.AST
         /// since there is no session budget to protect for this part. Application level does NOT come
         /// from that endpoint: it was confirmed to silently lag behind (or outright miss) a
         /// just-created or just-edited override, so it is read through a real query editor session
-        /// instead (<see cref="GetApplicationLevelQueriesFromSession"/>) — but only once per
-        /// Application, not once per member project. For each Application, one representative
-        /// candidate is picked up front, before any session is opened: a member project that belongs
-        /// to only that one Application (any project belonging to more than one is a confirmed,
-        /// deterministic server-side failure — "error getting queries" — for this exact call, every
-        /// time) and has a scan (a session cannot be opened without one). Both signals are already
-        /// known from data already loaded (<see cref="Apps"/>, <see cref="GetLastScan"/>) without
-        /// opening any session, so a doomed candidate is never attempted in the first place — unlike
-        /// the member-project loop this replaced, which tried every member project regardless and
-        /// only found out a candidate was bad by letting it fail.
+        /// instead (<see cref="GetApplicationLevelQueriesFromSession"/>, via QueryEditorClient) — but
+        /// only once per Application, not once per member project. For each Application, one
+        /// representative candidate is picked up front, before any session is opened: a member project
+        /// that belongs to only that one Application (any project belonging to more than one is a
+        /// confirmed, deterministic server-side failure — "error getting queries" — for this exact
+        /// call, every time) and has a scan (a session cannot be opened without one). Both signals are
+        /// already known from data already loaded (<see cref="Apps"/>, <see cref="GetLastScan"/>)
+        /// without opening any session, so a doomed candidate is never attempted in the first place —
+        /// unlike the member-project loop this replaced, which tried every member project regardless
+        /// and only found out a candidate was bad by letting it fail.
         ///
         /// This deliberately still stops short of CxOneInstance.GetApplicationLevelQueries's full
         /// resilience: if an Application's chosen representative fails anyway (a genuinely unexpected
@@ -2821,13 +2852,13 @@ namespace Checkmarx.API.AST
         /// and what to try next when the first choice doesn't work) that belongs in
         /// CxOneInstance.GetApplicationLevelQueries, not here.
         ///
-        /// The Application-level phase runs with its degree of parallelism explicitly capped to this
-        /// client's own concurrent-session budget (see querySessionGate) rather than left to
-        /// Parallel.ForEach's default (typically the machine's core count): the semaphore inside
-        /// session creation already prevents exceeding that budget regardless, but letting far more
-        /// threads than that pile up blocked on it needlessly consumes thread-pool threads and risks
-        /// later ones timing out waiting for a turn on a large tenant, for no benefit — nothing beyond
-        /// the budget can make progress anyway.
+        /// The Application-level phase runs with its degree of parallelism explicitly capped to
+        /// QueryEditorClient's own concurrent-session budget rather than left to Parallel.ForEach's
+        /// default (typically the machine's core count): the semaphore inside session creation already
+        /// prevents exceeding that budget regardless, but letting far more threads than that pile up
+        /// blocked on it needlessly consumes thread-pool threads and risks later ones timing out
+        /// waiting for a turn on a large tenant, for no benefit — nothing beyond the budget can make
+        /// progress anyway.
         /// </summary>
         /// <returns>
         /// A dictionary mapping query IDs to queries, resolved to the most specific level defined for
@@ -2857,12 +2888,12 @@ namespace Checkmarx.API.AST
                     representativeProjectIds.Add(candidate);
             });
 
-            var sessionOptions = new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrentQuerySessions };
+            var sessionOptions = new ParallelOptions { MaxDegreeOfParallelism = QueryEditorClient.MaxConcurrentSessions };
             Parallel.ForEach(representativeProjectIds.Distinct(), sessionOptions, representativeProjectId =>
             {
                 try
                 {
-                    foreach (var query in GetApplicationLevelQueriesFromSession(representativeProjectId).Select(toQueriesModel))
+                    foreach (var query in queryEditorClient.GetApplicationLevelQueriesFromSession(representativeProjectId).Select(toQueriesModel))
                         allQueries.Add(query);
                 }
                 catch (Exception ex)
@@ -2966,7 +2997,7 @@ namespace Checkmarx.API.AST
             var applications = (GetProjectApplications(projectId) ?? Enumerable.Empty<Services.Applications.Application>()).ToList();
 
             if (applications.Count <= 1)
-                return getQueriesDictionary(GetApplicationLevelQueriesFromSession(projectId).Select(toQueriesModel));
+                return getQueriesDictionary(queryEditorClient.GetApplicationLevelQueriesFromSession(projectId).Select(toQueriesModel));
 
             var candidates = applications
                 .Select(application => (
@@ -2979,7 +3010,7 @@ namespace Checkmarx.API.AST
             if (unresolved.Any())
                 throw new NotSupportedException($"Project {projectId} belongs to more than one Application ({string.Join(", ", applications.Select(a => a.Name))}), and the following have no other project that could be used to read their Application-level queries instead: {string.Join(", ", unresolved)}. Reading through a project shared by multiple Applications is a confirmed CxOne API limitation.");
 
-            return getQueriesDictionary(candidates.SelectMany(x => GetApplicationLevelQueriesFromSession(x.Alternative).Select(toQueriesModel)));
+            return getQueriesDictionary(candidates.SelectMany(x => queryEditorClient.GetApplicationLevelQueriesFromSession(x.Alternative).Select(toQueriesModel)));
         }
 
         /// <summary>
@@ -2997,846 +3028,128 @@ namespace Checkmarx.API.AST
             return getQueriesDictionary(getQueries(projectId, x => x.Level == ASTClient.Query_Level_Project));
         }
 
-        /// <summary>
-        /// Get the Query Source by language and name
-        /// </summary>
-        /// <param name="language">The query language</param>
-        /// <param name="queryName">The query name</param>
-        /// <param name="projectId">The ID of the project to retrieve queries for.</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <returns>The query source</returns>
-        /// <exception cref="ArgumentException"></exception>
-        /// <exception cref="Exception"></exception>
-        public string GetQuerySource(string language, string queryName, Guid? projectId = null, Guid? scanId = null)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            string level = Query_Level_Tenant;
-            if (projectId.HasValue)
-                level = Query_Level_Project;
-
-            var session = getQueryEditorSessionKey(level, language, projectId, scanId);
-
-            try
-            {
-                var query = getQueryByLanguageAndName(session, language, queryName);
-
-                if (query == null)
-                    throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                return query.Source;
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        // Everything below that reads/writes an actual query (rather than just listing them) goes
+        // through a real query editor session, and lives in QueryEditorClient
+        // (Services/QueryEditorClient.cs) — that class owns the session lifecycle, the tenant-wide
+        // slot budget, and its own retry policy tuned for the specific ways session creation is known
+        // to fail. These stay here as thin delegates purely so no existing caller anywhere else in the
+        // solution had to change.
 
         /// <summary>
-        /// Overrides a query at a project level
+        /// Get the Query Source by language and name. See <see cref="QueryEditorClient.GetQuerySource"/>.
         /// </summary>
-        /// <param name="projectId">The ID of the project to overwrite the query for.</param>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="querySource">Query Source</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <returns>Returns the query editor key</returns>
-        /// <exception cref="Exception"></exception>
-        public void OverrideProjectQuerySource(Guid projectId, string language, string queryName, string querySource, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            if (string.IsNullOrWhiteSpace(querySource))
-                throw new ArgumentException(nameof(querySource));
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, language, projectId, scanId);
-
-            try
-            {
-                var query = getQueryByLanguageAndName(session, language, queryName);
-
-                if (query == null)
-                    throw new Exception($"No query found for language {language} with the name {queryName} for project {projectId}");
-
-                // If there is an existing query at the project level already, call the method to update the source code
-                // If not, create the new query
-                if (query.Level == Query_Level_Project)
-                {
-                    // Do not update the source code if there is no differences. API will throw an error "error modifying query environment"
-                    if (query.Source != querySource)
-                        updateQuerySourceByEditorQuery(session, query.Id, querySource);
-                }
-                else
-                {
-                    createQuery(session, query, Query_Level_Project, querySource);
-                }
-            }
-            finally { endQueryEditorSession(session); }
-        }
-
-        // The write payload for an Application-level override was observed (via a captured browser
-        // session against the real API) to use the lowercase literal "application" in the
-        // CreateQueryRequest.Level field, unlike the Title-case "Application"/"Tenant"/"Project"
-        // values used on the read side (query.Level, tree node Title). Do not "fix" this back to
-        // Query_Level_Application without re-verifying against the live API.
-        private const string _applicationWriteLevel = "application";
+        public string GetQuerySource(string language, string queryName, Guid? projectId = null, Guid? scanId = null) =>
+            queryEditorClient.GetQuerySource(language, queryName, projectId, scanId);
 
         /// <summary>
-        /// Overrides a query at an Application level. Application-level overrides are written
-        /// through an ordinary Project session (there is no Application-scoped session) — the
-        /// server resolves the owning Application from the project itself.
+        /// Overrides a query at a project level. See <see cref="QueryEditorClient.OverrideProjectQuerySource"/>.
         /// </summary>
-        /// <param name="projectId">A project belonging to the Application to override the query for.</param>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="querySource">Query Source</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <exception cref="Exception"></exception>
-        /// <exception cref="NotSupportedException">The project belongs to more than one Application — which Application the override would apply to is unverified.</exception>
-        public void OverrideApplicationQuerySource(Guid projectId, string language, string queryName, string querySource, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            if (string.IsNullOrWhiteSpace(querySource))
-                throw new ArgumentException(nameof(querySource));
-
-            if (GetProjectApplications(projectId).Count() > 1)
-                throw new NotSupportedException(
-                    $"Project {projectId} belongs to more than one Application. Overriding a query at the Application " +
-                    "level for a project with multiple Applications is not supported — the server's resolution behavior in that case is unverified.");
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, language, projectId, scanId);
-
-            try
-            {
-                overrideApplicationQuerySourceInSession(session, language, queryName, querySource);
-            }
-            finally { endQueryEditorSession(session); }
-        }
-
-        private void overrideApplicationQuerySourceInSession(Guid session, string language, string queryName, string querySource)
-        {
-            var query = getQueryByLanguageAndName(session, language, queryName);
-
-            if (query == null)
-                throw new Exception($"No query found for language {language} with the name {queryName}");
-
-            if (query.Level == Query_Level_Application)
-            {
-                if (query.Source != querySource)
-                    updateQuerySourceByEditorQuery(session, query.Id, querySource);
-            }
-            else
-            {
-                createQuery(session, query, _applicationWriteLevel, querySource);
-            }
-        }
+        public void OverrideProjectQuerySource(Guid projectId, string language, string queryName, string querySource, Guid? scanId = null) =>
+            queryEditorClient.OverrideProjectQuerySource(projectId, language, queryName, querySource, scanId);
 
         /// <summary>
-        /// Creates or overrides several Application-level queries through a single project's session,
-        /// instead of opening one read/write session pair per query — the project must belong to
-        /// exactly one Application (see <see cref="OverrideApplicationQuerySource"/>).
+        /// Overrides a query at an Application level. See <see cref="QueryEditorClient.OverrideApplicationQuerySource"/>.
         /// </summary>
-        public IEnumerable<QueryBatchResult> CreateOrOverrideApplicationQuerySources(Guid representativeProjectId, IEnumerable<ProjectQueryUpsert> queries, Guid? scanId = null)
-        {
-            if (representativeProjectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(representativeProjectId));
-
-            if (GetProjectApplications(representativeProjectId).Count() > 1)
-                throw new NotSupportedException(
-                    $"Project {representativeProjectId} belongs to more than one Application. Overriding queries at the Application " +
-                    "level for a project with multiple Applications is not supported — the server's resolution behavior in that case is unverified.");
-
-            var results = new List<QueryBatchResult>();
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, null, representativeProjectId, scanId);
-            try
-            {
-                foreach (var item in queries)
-                {
-                    try
-                    {
-                        overrideApplicationQuerySourceInSession(session, item.Language, item.QueryName, item.QuerySource);
-                        results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = true });
-                    }
-                    catch (Exception ex)
-                    {
-                        results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = false, ErrorMessage = ex.Message });
-                    }
-                }
-            }
-            finally { endQueryEditorSession(session); }
-
-            return results;
-        }
+        public void OverrideApplicationQuerySource(Guid projectId, string language, string queryName, string querySource, Guid? scanId = null) =>
+            queryEditorClient.OverrideApplicationQuerySource(projectId, language, queryName, querySource, scanId);
 
         /// <summary>
-        /// Overrides a query at a tenant level
+        /// Creates or overrides several Application-level queries through a single project's session.
+        /// See <see cref="QueryEditorClient.CreateOrOverrideApplicationQuerySources"/>.
         /// </summary>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="querySource">Query Source</param>
-        /// <returns>Returns the query editor key</returns>
-        /// <exception cref="Exception"></exception>
-        public void OverrideTenantQuerySource(string language, string queryName, string querySource)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            if (string.IsNullOrWhiteSpace(querySource))
-                throw new ArgumentException(nameof(querySource));
-
-            var session = getQueryEditorSessionKey(Query_Level_Tenant, language);
-
-            try
-            {
-                var query = getQueryByLanguageAndName(session, language, queryName);
-
-                if (query == null)
-                    throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                // If there is an existing query at the tenant level already, call the method to update the source code
-                // If not, create the new query
-                if (query.Level == Query_Level_Tenant)
-                {
-                    // Do not update the source code if there is no differences. API will throw an error "error modifying query environment"
-                    if (query.Source != querySource)
-                        updateQuerySourceByEditorQuery(session, query.Id, querySource);
-                }
-                else
-                {
-                    // For some reason, in the current API version (and for tenant queries), you cannot send the query source in the creation body
-                    // You need to create the query and update the source code after
-                    CreateQueryRequest createBody = new CreateQueryRequest()
-                    {
-                        Name = query.Name,
-                        Language = query.Metadata.Language,
-                        Group = query.Metadata.Group,
-                        Severity = query.Metadata.Severity,
-                        Executable = query.Metadata.Executable
-                    };
-
-                    var queryId = requestQueryCreation(session, createBody);
-
-                    updateQuerySourceByEditorQuery(session, queryId, querySource);
-                }
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public IEnumerable<QueryBatchResult> CreateOrOverrideApplicationQuerySources(Guid representativeProjectId, IEnumerable<ProjectQueryUpsert> queries, Guid? scanId = null) =>
+            queryEditorClient.CreateOrOverrideApplicationQuerySources(representativeProjectId, queries, scanId);
 
         /// <summary>
-        /// Create a query at a tenant level
+        /// Overrides a query at a tenant level. See <see cref="QueryEditorClient.OverrideTenantQuerySource"/>.
         /// </summary>
-        /// <param name="language">Query language</param>
-        /// <param name="queryName">Query Name</param>
-        /// <param name="group">Query Group</param>
-        /// <param name="severity">Query Severity</param>
-        /// <param name="source">Query Source</param>
-        /// <param name="isExecutable">Is the query executable</param>
-        /// <returns>Returns the query editor key</returns>
-        /// <exception cref="Exception"></exception>
-        public void CreateTenantQuery(string language, string queryName, string group, string severity, string source, bool isExecutable)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
+        public void OverrideTenantQuerySource(string language, string queryName, string querySource) =>
+            queryEditorClient.OverrideTenantQuerySource(language, queryName, querySource);
 
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            if (string.IsNullOrWhiteSpace(group))
-                throw new ArgumentException(nameof(group));
-
-            if (string.IsNullOrWhiteSpace(severity))
-                throw new ArgumentException(nameof(severity));
-
-            if (string.IsNullOrWhiteSpace(source))
-                throw new ArgumentException(nameof(source));
-
-            var session = getQueryEditorSessionKey(Query_Level_Tenant, language);
-
-            try
-            {
-                CreateQueryRequest createBody = new CreateQueryRequest()
-                {
-                    Name = queryName,
-                    Language = language,
-                    Group = group,
-                    Severity = severity,
-                    Executable = isExecutable
-                };
-
-                var queryId = requestQueryCreation(session, createBody);
-
-                updateQuerySourceByEditorQuery(session, queryId, source);
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        /// <summary>
+        /// Create a query at a tenant level. See <see cref="QueryEditorClient.CreateTenantQuery"/>.
+        /// </summary>
+        public void CreateTenantQuery(string language, string queryName, string group, string severity, string source, bool isExecutable) =>
+            queryEditorClient.CreateTenantQuery(language, queryName, group, severity, source, isExecutable);
 
         #region Batched Query Editor Operations
 
         /// <summary>
-        /// Result of a single query read/create/override attempt made as part of a batch.
-        /// </summary>
-        public class QueryBatchResult
-        {
-            public string Language { get; set; }
-            public string QueryName { get; set; }
-            public bool Success { get; set; }
-            public string ErrorMessage { get; set; }
-            public string Source { get; set; }
-        }
-
-        public class TenantQueryUpsert
-        {
-            public string Language { get; set; }
-            public string QueryName { get; set; }
-            public string QuerySource { get; set; }
-
-            /// <summary>Required only when the query does not exist yet at Cx or Tenant level.</summary>
-            public string Group { get; set; }
-            public string Severity { get; set; }
-            public bool? IsExecutable { get; set; }
-        }
-
-        public class ProjectQueryUpsert
-        {
-            public string Language { get; set; }
-            public string QueryName { get; set; }
-            public string QuerySource { get; set; }
-        }
-
-        /// <summary>
         /// Reads the source of several Tenant-level queries, opening one session per distinct
-        /// language instead of one session per query.
+        /// language instead of one session per query. See <see cref="QueryEditorClient.GetTenantQuerySources"/>.
         /// </summary>
-        public IEnumerable<QueryBatchResult> GetTenantQuerySources(IEnumerable<(string Language, string QueryName)> queries)
-        {
-            var results = new List<QueryBatchResult>();
-
-            foreach (var languageGroup in queries.GroupBy(q => q.Language))
-            {
-                var session = getQueryEditorSessionKey(Query_Level_Tenant, languageGroup.Key);
-                try
-                {
-                    foreach (var (language, queryName) in languageGroup)
-                    {
-                        try
-                        {
-                            var query = getQueryByLanguageAndName(session, language, queryName);
-                            if (query == null)
-                                throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                            results.Add(new QueryBatchResult { Language = language, QueryName = queryName, Success = true, Source = query.Source });
-                        }
-                        catch (Exception ex)
-                        {
-                            results.Add(new QueryBatchResult { Language = language, QueryName = queryName, Success = false, ErrorMessage = ex.Message });
-                        }
-                    }
-                }
-                finally { endQueryEditorSession(session); }
-            }
-
-            return results;
-        }
+        public IEnumerable<QueryBatchResult> GetTenantQuerySources(IEnumerable<(string Language, string QueryName)> queries) =>
+            queryEditorClient.GetTenantQuerySources(queries);
 
         /// <summary>
         /// Reads the source of several Project-level queries for a single project/scan, opening
-        /// exactly one session for the whole call instead of one session per query.
+        /// exactly one session for the whole call instead of one session per query. See
+        /// <see cref="QueryEditorClient.GetProjectQuerySources"/>.
         /// </summary>
-        public IEnumerable<QueryBatchResult> GetProjectQuerySources(Guid projectId, IEnumerable<(string Language, string QueryName)> queries, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            var results = new List<QueryBatchResult>();
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, null, projectId, scanId);
-            try
-            {
-                foreach (var (language, queryName) in queries)
-                {
-                    try
-                    {
-                        var query = getQueryByLanguageAndName(session, language, queryName);
-                        if (query == null)
-                            throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                        results.Add(new QueryBatchResult { Language = language, QueryName = queryName, Success = true, Source = query.Source });
-                    }
-                    catch (Exception ex)
-                    {
-                        results.Add(new QueryBatchResult { Language = language, QueryName = queryName, Success = false, ErrorMessage = ex.Message });
-                    }
-                }
-            }
-            finally { endQueryEditorSession(session); }
-
-            return results;
-        }
+        public IEnumerable<QueryBatchResult> GetProjectQuerySources(Guid projectId, IEnumerable<(string Language, string QueryName)> queries, Guid? scanId = null) =>
+            queryEditorClient.GetProjectQuerySources(projectId, queries, scanId);
 
         /// <summary>
         /// Creates or overrides several Tenant-level queries, opening one session per distinct
-        /// language instead of one (or two, via a separate existence probe) session per query.
+        /// language instead of one (or two, via a separate existence probe) session per query. See
+        /// <see cref="QueryEditorClient.CreateOrOverrideTenantQuerySources"/>.
         /// </summary>
-        public IEnumerable<QueryBatchResult> CreateOrOverrideTenantQuerySources(IEnumerable<TenantQueryUpsert> queries)
-        {
-            var results = new List<QueryBatchResult>();
-
-            foreach (var languageGroup in queries.GroupBy(q => q.Language))
-            {
-                var session = getQueryEditorSessionKey(Query_Level_Tenant, languageGroup.Key);
-                try
-                {
-                    foreach (var item in languageGroup)
-                    {
-                        try
-                        {
-                            upsertTenantQuerySourceInSession(session, item);
-                            results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = true });
-                        }
-                        catch (Exception ex)
-                        {
-                            results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = false, ErrorMessage = ex.Message });
-                        }
-                    }
-                }
-                finally { endQueryEditorSession(session); }
-            }
-
-            return results;
-        }
+        public IEnumerable<QueryBatchResult> CreateOrOverrideTenantQuerySources(IEnumerable<TenantQueryUpsert> queries) =>
+            queryEditorClient.CreateOrOverrideTenantQuerySources(queries);
 
         /// <summary>
         /// Creates or overrides several Project-level queries for a single project/scan, opening
-        /// exactly one session for the whole call instead of one session per query.
+        /// exactly one session for the whole call instead of one session per query. See
+        /// <see cref="QueryEditorClient.CreateOrOverrideProjectQuerySources"/>.
         /// </summary>
-        public IEnumerable<QueryBatchResult> CreateOrOverrideProjectQuerySources(Guid projectId, IEnumerable<ProjectQueryUpsert> queries, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            var results = new List<QueryBatchResult>();
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, null, projectId, scanId);
-            try
-            {
-                foreach (var item in queries)
-                {
-                    try
-                    {
-                        var query = getQueryByLanguageAndName(session, item.Language, item.QueryName);
-                        if (query == null)
-                            throw new Exception($"No query found for language {item.Language} with the name {item.QueryName} for project {projectId}");
-
-                        if (query.Level == Query_Level_Project)
-                        {
-                            if (query.Source != item.QuerySource)
-                                updateQuerySourceByEditorQuery(session, query.Id, item.QuerySource);
-                        }
-                        else
-                        {
-                            createQuery(session, query, Query_Level_Project, item.QuerySource);
-                        }
-
-                        results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = true });
-                    }
-                    catch (Exception ex)
-                    {
-                        results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = false, ErrorMessage = ex.Message });
-                    }
-                }
-            }
-            finally { endQueryEditorSession(session); }
-
-            return results;
-        }
-
-        private void upsertTenantQuerySourceInSession(Guid session, TenantQueryUpsert item)
-        {
-            var query = getQueryByLanguageAndName(session, item.Language, item.QueryName);
-
-            if (query == null)
-            {
-                if (string.IsNullOrWhiteSpace(item.Group) || string.IsNullOrWhiteSpace(item.Severity) || !item.IsExecutable.HasValue)
-                    throw new ArgumentNullException(nameof(item.Group), $"Group, Severity and IsExecutable are required to create the new tenant query {item.Language} {item.QueryName}.");
-
-                CreateQueryRequest createBody = new CreateQueryRequest()
-                {
-                    Name = item.QueryName,
-                    Language = item.Language,
-                    Group = item.Group,
-                    Severity = item.Severity,
-                    Executable = item.IsExecutable.Value
-                };
-
-                var queryId = requestQueryCreation(session, createBody);
-                updateQuerySourceByEditorQuery(session, queryId, item.QuerySource);
-            }
-            else if (query.Level == Query_Level_Tenant)
-            {
-                if (query.Source != item.QuerySource)
-                    updateQuerySourceByEditorQuery(session, query.Id, item.QuerySource);
-            }
-            else
-            {
-                // Found at Cx level, not yet overridden at Tenant level. The new Tenant-level override
-                // must be created with the CALLER's Group/Severity/IsExecutable, not this query's own
-                // (target-side) Cx metadata: the two tenants can report different Group/Severity for
-                // the "same" base query (e.g. differing SAST engine versions), and identity-based
-                // comparisons elsewhere key off the source tenant's Group. Creating the override with
-                // the target's own Group instead of the source's silently produces a Tenant-level query
-                // that never matches that identity again, so it gets endlessly re-detected as missing.
-                if (string.IsNullOrWhiteSpace(item.Group) || string.IsNullOrWhiteSpace(item.Severity) || !item.IsExecutable.HasValue)
-                    throw new ArgumentNullException(nameof(item.Group), $"Group, Severity and IsExecutable are required to override the tenant query {item.Language} {item.QueryName}.");
-
-                // For some reason, in the current API version (and for tenant queries), you cannot send the query source in the creation body
-                // You need to create the query and update the source code after
-                CreateQueryRequest createBody = new CreateQueryRequest()
-                {
-                    Name = query.Name,
-                    Language = item.Language,
-                    Group = item.Group,
-                    Severity = item.Severity,
-                    Executable = item.IsExecutable.Value
-                };
-
-                var queryId = requestQueryCreation(session, createBody);
-                updateQuerySourceByEditorQuery(session, queryId, item.QuerySource);
-            }
-        }
+        public IEnumerable<QueryBatchResult> CreateOrOverrideProjectQuerySources(Guid projectId, IEnumerable<ProjectQueryUpsert> queries, Guid? scanId = null) =>
+            queryEditorClient.CreateOrOverrideProjectQuerySources(projectId, queries, scanId);
 
         #endregion
 
         /// <summary>
-        /// Deletes a query at a Project level
+        /// Deletes a query at a Project level. See <see cref="QueryEditorClient.DeleteProjectQuery"/>.
         /// </summary>
-        /// <param name="projectId">The ID of the project to delete the query for</param>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="withQueryDescription">Only deletes query, if the query source contains the description (case insensitive)</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <exception cref="Exception"></exception>
-        public bool DeleteProjectQuery(Guid projectId, string language, string queryName, string withQueryDescription = null, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, language, projectId, scanId);
-
-            try
-            {
-                var query = getQueryByLanguageAndName(session, language, queryName);
-
-                if (query == null)
-                    throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                if (query.Level != Query_Level_Project)
-                    throw new Exception($"The detected query is at {query.Level} level, and not at {Query_Level_Project} level.");
-
-                // In cases were we just want to delete queries with a certain description added in the source
-                if (!string.IsNullOrWhiteSpace(withQueryDescription))
-                {
-                    if (!query.Source.ToLower().Contains(withQueryDescription.ToLower()))
-                        throw new Exception($"The detected query does not contain the description provided.");
-                }
-
-                return deleteQueryWithSessionId(session, query.Id);
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public bool DeleteProjectQuery(Guid projectId, string language, string queryName, string withQueryDescription = null, Guid? scanId = null) =>
+            queryEditorClient.DeleteProjectQuery(projectId, language, queryName, withQueryDescription, scanId);
 
         /// <summary>
-        /// Deletes a query at an Application level, through an ordinary Project session (there is
-        /// no Application-scoped session — the server resolves the owning Application from the project).
+        /// Deletes a query at an Application level. See <see cref="QueryEditorClient.DeleteApplicationQuery"/>.
         /// </summary>
-        /// <param name="projectId">A project belonging to the Application to delete the query for.</param>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="withQueryDescription">Only deletes query, if the query source contains the description (case insensitive)</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <exception cref="Exception"></exception>
-        /// <exception cref="NotSupportedException">The project belongs to more than one Application — which Application the query would be deleted from is unverified.</exception>
-        public bool DeleteApplicationQuery(Guid projectId, string language, string queryName, string withQueryDescription = null, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            if (GetProjectApplications(projectId).Count() > 1)
-                throw new NotSupportedException(
-                    $"Project {projectId} belongs to more than one Application. Deleting a query at the Application " +
-                    "level for a project with multiple Applications is not supported — the server's resolution behavior in that case is unverified.");
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, language, projectId, scanId);
-
-            try
-            {
-                var query = getQueryByLanguageAndName(session, language, queryName);
-
-                if (query == null)
-                    throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                if (query.Level != Query_Level_Application)
-                    throw new Exception($"The detected query is at {query.Level} level, and not at {Query_Level_Application} level.");
-
-                // In cases were we just want to delete queries with a certain description added in the source
-                if (!string.IsNullOrWhiteSpace(withQueryDescription))
-                {
-                    if (!query.Source.ToLower().Contains(withQueryDescription.ToLower()))
-                        throw new Exception($"The detected query does not contain the description provided.");
-                }
-
-                return deleteQueryWithSessionId(session, query.Id);
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public bool DeleteApplicationQuery(Guid projectId, string language, string queryName, string withQueryDescription = null, Guid? scanId = null) =>
+            queryEditorClient.DeleteApplicationQuery(projectId, language, queryName, withQueryDescription, scanId);
 
         /// <summary>
-        /// Deletes a query at a Tenant level
+        /// Deletes a query at a Tenant level. See <see cref="QueryEditorClient.DeleteTenantQuery"/>.
         /// </summary>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="withQueryDescription">Only deletes query, if the query source contains the description (case insensitive)</param>
-        /// <exception cref="Exception"></exception>
-        public bool DeleteTenantQuery(string language, string queryName, string withQueryDescription = null)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentException(nameof(queryName));
-
-            var session = getQueryEditorSessionKey(Query_Level_Tenant, language);
-
-            try
-            {
-                var query = getQueryByLanguageAndName(session, language, queryName);
-
-                if (query == null)
-                    throw new Exception($"No query found for language {language} with the name {queryName}");
-
-                if (query.Level != Query_Level_Tenant)
-                    throw new Exception($"The detected query is at {query.Level} level, and not at {Query_Level_Tenant} level.");
-
-                // In cases were we just want to delete queries with a certain description added in the source
-                if (!string.IsNullOrWhiteSpace(withQueryDescription))
-                {
-                    if (!query.Source.ToLower().Contains(withQueryDescription.ToLower()))
-                        throw new Exception($"The detected query does not contain the description provided.");
-                }
-
-                return deleteQueryWithSessionId(session, query.Id);
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public bool DeleteTenantQuery(string language, string queryName, string withQueryDescription = null) =>
+            queryEditorClient.DeleteTenantQuery(language, queryName, withQueryDescription);
 
         /// <summary>
-        /// Deletes a query at a Project or Tenant level through the query editor key
+        /// Deletes a query at a Project or Tenant level through the query editor key. See
+        /// <see cref="QueryEditorClient.DeleteQueryByKey"/>.
         /// </summary>
-        /// <param name="queryKey">Query Editor Key</param>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="projectId">The ID of the project to create a session. Mandatory if it is a project level query</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <exception cref="Exception"></exception>
-        public bool DeleteQueryByKey(string queryKey, string language, Guid? projectId = null, Guid? scanId = null)
-        {
-            if (string.IsNullOrWhiteSpace(queryKey))
-                throw new ArgumentException(nameof(queryKey));
-
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentException(nameof(language));
-
-            string level = Query_Level_Project;
-            if (!projectId.HasValue)
-                level = Query_Level_Tenant;
-
-            var session = getQueryEditorSessionKey(level, language, projectId, scanId);
-
-            try
-            {
-                return deleteQueryWithSessionId(session, queryKey);
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public bool DeleteQueryByKey(string queryKey, string language, Guid? projectId = null, Guid? scanId = null) =>
+            queryEditorClient.DeleteQueryByKey(queryKey, language, projectId, scanId);
 
         /// <summary>
-        /// Query details by language and name
+        /// Query details by language and name. See <see cref="QueryEditorClient.GetQueryByLanguageAndName"/>.
         /// </summary>
-        /// <param name="language">Query language (case insensitive)</param>
-        /// <param name="queryName">Query Name (case insensitive)</param>
-        /// <param name="level">The query level (Cx, Tenant or Project)</param>
-        /// <param name="projectId">The ID of the project to fetch the query for. Mandatory if the level is Project</param>
-        /// <param name="scanId">The ID of the scan to create a session</param>
-        /// <returns>Returns the query editor key</returns>
-        /// <exception cref="Exception"></exception>
-        public QueryResponse GetQueryByLanguageAndName(string language, string queryName, string level, Guid? projectId = null, Guid? scanId = null)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentNullException(nameof(language));
-
-            if (string.IsNullOrWhiteSpace(queryName))
-                throw new ArgumentNullException(nameof(queryName));
-
-            if (string.IsNullOrWhiteSpace(level))
-                throw new ArgumentNullException(nameof(level));
-
-            if (level == Query_Level_Project && !projectId.HasValue)
-                throw new Exception($"In order to fetch information of query level \"{Query_Level_Project}\", you must provide a project id.");
-
-            var session = getQueryEditorSessionKey(level, language, projectId, scanId);
-
-            try
-            {
-                return getQueryByLanguageAndName(session, language, queryName);
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public QueryResponse GetQueryByLanguageAndName(string language, string queryName, string level, Guid? projectId = null, Guid? scanId = null) =>
+            queryEditorClient.GetQueryByLanguageAndName(language, queryName, level, projectId, scanId);
 
         /// <summary>
-        /// Scan Query Nodes
+        /// Scan Query Nodes. See <see cref="QueryEditorClient.GetProjectScanQueryNodes"/>.
         /// </summary>
-        /// <param name="projectId">Project Id</param>
-        /// <param name="scanId">Scan Id</param>
-        /// <returns></returns>
-        /// <exception cref="ArgumentNullException"></exception>
-        public IEnumerable<Checkmarx.API.AST.Services.QueryEditor.QueriesTree> GetProjectScanQueryNodes(Guid projectId, Guid scanId)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            if (scanId == Guid.Empty)
-                throw new ArgumentNullException(nameof(scanId));
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, null, projectId, scanId);
-
-            try
-            {
-                return QueryEditor.GetQueriesAsync(session, includeMetadata: true).Result;
-            }
-            finally { endQueryEditorSession(session); }
-        }
+        public IEnumerable<Checkmarx.API.AST.Services.QueryEditor.QueriesTree> GetProjectScanQueryNodes(Guid projectId, Guid scanId) =>
+            queryEditorClient.GetProjectScanQueryNodes(projectId, scanId);
 
         /// <summary>
         /// Discovers Application-level query overrides visible through a given project's query
-        /// editor session (i.e. through an Application the project belongs to), by walking the
-        /// live session tree instead of the plain /queries listing endpoint — confirmed unreliable
-        /// for Application-level entries (silently missing a recently created override that the
-        /// query editor UI and this same session tree show immediately).
-        ///
-        /// Unlike the plain listing (which collapses each query to a single "effective" level, so a
-        /// project's own Project-level override can hide the Application-level one for that same
-        /// project), the session tree exposes Cx/Tenant/Application/Project as sibling branches per
-        /// query — so there is no masking risk here: any query under the "Application" branch is
-        /// genuinely an Application-level override, regardless of what else that project overrides.
-        ///
-        /// One session covers every language in one call (no language filter), so this costs exactly
-        /// one session for the whole project, not one per language.
-        ///
-        /// The server also accepts a "level" query parameter to prune the response down to just the
-        /// Application branch — but that parameter is NOT used here: confirmed (via a live test) that
-        /// it reliably triggers a server-side 500 ("error getting queries", code 796) on projects that
-        /// belong to more than one Application, while the identical unfiltered call succeeds instantly
-        /// on the same project/session. So we always fetch the full tree (Cx/Tenant/Application/Project)
-        /// and pick out the Application branch client-side instead.
-        ///
-        /// Returns the full session query-editor detail (<see cref="Services.QueryEditor.QueryResponse"/>,
-        /// including Source) rather than the lighter <see cref="Services.SASTQueriesAudit.Queries"/> used
-        /// by the plain listing endpoint — callers that need the source of an Application-level override
-        /// (e.g. the tenant migration, to compare/copy it) would otherwise have to open a second session
-        /// via GetQuerySource, which carries a real masking risk: if the representative project used for
-        /// discovery also happens to carry its own Project-level override of the same query, a fresh
-        /// language+name lookup would silently resolve to that Project-level source instead (Project
-        /// outranks Application in getQueryByLanguageAndName's priority walk). Reusing the detail already
-        /// fetched here avoids both the extra session and that risk. This depends entirely on the
-        /// GetQueryAsync call below passing includeSource: true — confirmed live: leaving it false
-        /// returns a QueryResponse with every other field populated but Source silently null, which
-        /// surfaces downstream as an opaque "Value cannot be null (Parameter 'source')" at write time,
-        /// nowhere near this method.
+        /// editor session. See <see cref="QueryEditorClient.GetApplicationLevelQueriesFromSession"/>.
         /// </summary>
-        public IEnumerable<Services.QueryEditor.QueryResponse> GetApplicationLevelQueriesFromSession(Guid projectId, Guid? scanId = null)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            var session = getQueryEditorSessionKey(Query_Level_Project, null, projectId, scanId);
-
-            try
-            {
-                var tree = QueryEditor.GetQueriesAsync(session, includeMetadata: true).Result;
-                var result = new List<Services.QueryEditor.QueryResponse>();
-
-                foreach (var languageNode in tree ?? Enumerable.Empty<Services.QueryEditor.QueriesTree>())
-                {
-                    var applicationNode = languageNode.Children?.SingleOrDefault(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase));
-                    if (applicationNode == null)
-                        continue;
-
-                    foreach (var leaf in collectLeaves(applicationNode))
-                    {
-                        var detail = QueryEditor.GetQueryAsync(session, leaf.Key, includeMetadata: true, includeSource: true).Result;
-                        if (detail == null)
-                            continue;
-
-                        // Normalize Level/Language the same defensive way the old Queries-mapping did —
-                        // the query's own reported level/language can be inconsistent with the tree
-                        // branch it was actually found under.
-                        detail.Level = Query_Level_Application;
-                        if (detail.Metadata != null)
-                            detail.Metadata.Language = languageNode.Title;
-
-                        result.Add(detail);
-                    }
-                }
-
-                return result;
-            }
-            finally { endQueryEditorSession(session); }
-        }
-
-        private static IEnumerable<Services.QueryEditor.QueriesTree> collectLeaves(Services.QueryEditor.QueriesTree node)
-        {
-            if (node.Children == null || !node.Children.Any())
-            {
-                if (node.IsLeaf)
-                    yield return node;
-
-                yield break;
-            }
-
-            foreach (var child in node.Children)
-                foreach (var leaf in collectLeaves(child))
-                    yield return leaf;
-        }
+        public IEnumerable<Services.QueryEditor.QueryResponse> GetApplicationLevelQueriesFromSession(Guid projectId, Guid? scanId = null) =>
+            queryEditorClient.GetApplicationLevelQueriesFromSession(projectId, scanId);
 
         #region Private Methods
 
@@ -3897,366 +3210,6 @@ namespace Checkmarx.API.AST
 
             return dictionary;
         }
-
-        private string createQuery(Guid session, QueryResponse query, string level, string source)
-        {
-            if (query == null)
-                throw new ArgumentNullException(nameof(query));
-
-            if (string.IsNullOrWhiteSpace(level))
-                throw new ArgumentNullException(nameof(level));
-
-            if (string.IsNullOrWhiteSpace(source))
-                throw new ArgumentNullException(nameof(source));
-
-            if (level != Query_Level_Tenant && level != Query_Level_Project && level != _applicationWriteLevel)
-                throw new Exception($"You can only create a query at {Query_Level_Tenant}, {Query_Level_Project} or Application level.");
-
-            return createQueryByEditorQuery(session, query.Id, query.Name, query.Path, query.Metadata.Cwe, query.Metadata.Language, query.Metadata.Group, query.Metadata.Severity, query.Metadata.Executable, query.Metadata.Description, query.Metadata.SastId, query.Metadata.Presets?.ToList(), level, source);
-        }
-
-        private Guid getProjectScanIdForQueryEditorSession(Guid projectId)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            var lastScan = GetLastScan(projectId, completed: false);
-
-            if (lastScan == null)
-                throw new InvalidOperationException($"No scan found for project id {projectId}");
-
-            return lastScan.Id;
-        }
-
-        #region QueryEditor
-
-        private Guid getQueryEditorSessionKey(string level, string language = null, Guid? projectId = null, Guid? scanId = null)
-        {
-            if (level != Query_Level_Tenant && level != Query_Level_Project)
-                throw new Exception($"You can only create a query editor session for {Query_Level_Tenant} and {Query_Level_Project} levels.");
-
-            var gate = querySessionGate;
-
-            // Block until a session slot is available or we time out. This is the primary guard
-            // against exceeding the tenant-wide session limit when called from parallel code.
-            if (!gate.Wait(_querySessionAcquireTimeout))
-                throw new TimeoutException(
-                    $"Could not acquire a query editor session slot within {_querySessionAcquireTimeout.TotalMinutes} minutes. " +
-                    "The tenant may have reached its maximum concurrent session limit.");
-
-            bool sessionCreated = false;
-            try
-            {
-                Guid id;
-                if (level == Query_Level_Tenant)
-                {
-                    if (string.IsNullOrWhiteSpace(language))
-                        throw new ArgumentNullException(nameof(language));
-
-                    id = createQueryEditorSessionWithRetry(() => createQueryEditorNewSessionId(language));
-                }
-                else
-                {
-                    if (!projectId.HasValue || projectId == Guid.Empty)
-                        throw new ArgumentNullException(nameof(projectId));
-
-                    if (!scanId.HasValue)
-                        scanId = getProjectScanIdForQueryEditorSession(projectId.Value);
-
-                    id = createQueryEditorSessionWithRetry(() => createQueryEditorNewSessionId(projectId.Value, scanId.Value));
-                }
-
-                // Session exists on the server — ownership transfers to endQueryEditorSession.
-                sessionCreated = true;
-                return id;
-            }
-            catch
-            {
-                // Session was never created — release the slot now; endQueryEditorSession won't be called.
-                if (!sessionCreated)
-                    gate.Release();
-                throw;
-            }
-        }
-
-        // Retries session creation to ride out contention from other users/processes sharing the
-        // tenant's session limit, since the API no longer exposes a way to check availability upfront.
-        // Every failed attempt is logged with full diagnostics, since nobody currently knows the exact
-        // shape of the server's "no slots available" error.
-        private Guid createQueryEditorSessionWithRetry(Func<Guid> createSession)
-        {
-            Exception lastError = null;
-            for (int attempt = 1; attempt <= _querySessionCreateMaxAttempts; attempt++)
-            {
-                try
-                {
-                    return createSession();
-                }
-                catch (Exception ex)
-                {
-                    lastError = ex;
-
-                    // .Result wraps a faulted task's exception in an AggregateException — unwrap it
-                    // to actually see the ApiException and its status code, instead of always falling
-                    // through to the generic "unknown failure" branch.
-                    var apiEx = unwrapApiException(ex);
-                    string details = apiEx != null
-                        ? $"StatusCode={apiEx.StatusCode}, Response={apiEx.Response}"
-                        : ex.ToString();
-
-                    System.Diagnostics.Trace.TraceWarning(
-                        $"[QueryEditor] Session creation attempt {attempt}/{_querySessionCreateMaxAttempts} failed: {details}");
-
-                    // A 4xx response is a permanent, client-side rejection (e.g. a malformed request
-                    // for this specific project) — retrying it verbatim will never succeed, so don't
-                    // burn the backoff delay on further attempts.
-                    if (apiEx != null && apiEx.StatusCode >= 400 && apiEx.StatusCode < 500)
-                        throw new InvalidOperationException(
-                            $"Could not create a query editor session: the server rejected the request (status {apiEx.StatusCode}). This is not a session-limit issue and will not succeed on retry.",
-                            ex);
-
-                    if (attempt < _querySessionCreateMaxAttempts)
-                        System.Threading.Thread.Sleep(_querySessionCreateRetryDelay);
-                }
-            }
-
-            throw new InvalidOperationException(
-                $"Could not create a query editor session after {_querySessionCreateMaxAttempts} attempts. " +
-                "The CxOne tenant may have no available query editor session slots — wait for existing sessions to close before retrying.",
-                lastError);
-        }
-
-        private static Exceptions.ApiException unwrapApiException(Exception ex)
-        {
-            if (ex is Exceptions.ApiException direct)
-                return direct;
-
-            if (ex is AggregateException agg)
-                return agg.Flatten().InnerExceptions.OfType<Exceptions.ApiException>().FirstOrDefault();
-
-            return null;
-        }
-        private Guid createQueryEditorNewSessionId(Guid projectId, Guid scanId)
-        {
-            if (projectId == Guid.Empty)
-                throw new ArgumentNullException(nameof(projectId));
-
-            if (scanId == Guid.Empty)
-                throw new ArgumentNullException(nameof(scanId));
-
-            var session = QueryEditor.CreateSessionAsync(new Services.QueryEditor.SessionRequest() { ProjectId = projectId, ScanId = scanId, Scanner = "sast", Timeout = 120 }).Result;
-
-            return checkSessionStatusAndGetId(session, projectId: projectId);
-        }
-        private Guid createQueryEditorNewSessionId(string language)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                throw new ArgumentNullException(nameof(language));
-
-            language = language.Trim().ToLower();
-
-            var session = QueryEditor.CreateSessionAsync(new Services.QueryEditor.SessionRequest() { Filter = language, Scanner = "sast", Timeout = 120 }).Result;
-
-            return checkSessionStatusAndGetId(session, language: language);
-        }
-        private Guid checkSessionStatusAndGetId(Services.QueryEditor.SessionResponse session, Guid? projectId = null, string language = null)
-        {
-            bool completed = false;
-            Guid? id = null;
-            while (!completed)
-            {
-                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
-
-                var status = QueryEditor.CheckRequestSessionStatusAsync(session.Id, session.Data.RequestID.Value).Result;
-
-                if (status.Completed)
-                {
-                    completed = true;
-                    if (status.Status == RequestStatusStatus.Finished)
-                        id = session.Id;
-                    else
-                    {
-                        string errorMessage = $"Error creating query session with status \"{status.Status.ToString()}\".";
-                        if (projectId.HasValue)
-                            errorMessage = $"Error creating query session for project {projectId} with status \"{status.Status.ToString()}\".";
-                        else if (!string.IsNullOrWhiteSpace(language))
-                            errorMessage = $"Error creating session for language {language} with status \"{status.Status.ToString()}\".";
-
-                        throw new Exception($"Error creating query session with status \"{status.Status.ToString()}\".");
-                    }
-                }
-            }
-
-            if (id == null)
-            {
-                string errorMessage = $"Unknown error creating session";
-                if (projectId.HasValue)
-                    errorMessage = $"Unknown error creating session for project {projectId}";
-                else if (!string.IsNullOrWhiteSpace(language))
-                    errorMessage = $"Unknown error creating session for language {language}";
-
-                throw new Exception(errorMessage);
-            }
-
-            return id.Value;
-        }
-        private void endQueryEditorSession(Guid session)
-        {
-            try
-            {
-                QueryEditor.DeleteSessionAsync(session).Wait();
-            }
-            catch (Exception ex)
-            {
-                // Log but do not rethrow — a failed DELETE must never mask the original operation's result.
-                // The session will expire on its own via the server-side timeout.
-                System.Diagnostics.Trace.TraceWarning($"[QueryEditor] Failed to delete session {session}: {ex.Message}");
-            }
-            finally
-            {
-                querySessionGate.Release();
-            }
-        }
-
-        private QueryResponse getQueryByLanguageAndName(Guid session, string language, string queryName)
-        {
-            var projectQueries = QueryEditor.GetQueriesAsync(session, includeMetadata: true).Result;
-            var possibleQueriyToOverride = Checkmarx.API.AST.Services.QueryEditor.QueriesTree.FilterTreeByQueryName(projectQueries, queryName)
-                                                .SingleOrDefault(x => x.Title.ToLower() == language.ToLower());
-
-            if (possibleQueriyToOverride == null)
-                return null;
-
-            // Precedence: Project overrides Application overrides Tenant overrides the Cx default.
-            Checkmarx.API.AST.Services.QueryEditor.QueriesTree selectedNode = null;
-            if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase));
-            else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase));
-            else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase));
-            else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase));
-            else
-                throw new Exception($"Query {queryName} has an unknown Level ");
-
-            var queryDetected = selectedNode.GetLastChildrenByTitle(queryName).Single();
-
-            return QueryEditor.GetQueryAsync(session, queryDetected.Key, true, true).Result;
-        }
-
-        private string createQueryByEditorQuery(Guid session, string editorQueryId, string name, string path, long cwe, string language, string group, string severity, bool executable, long description, long sastId, List<string> presets, string level, string source)
-        {
-            if (session == Guid.Empty)
-                throw new ArgumentNullException(nameof(session));
-
-            CreateQueryRequest createBody = new CreateQueryRequest()
-            {
-                Name = name,
-                Cwe = cwe,
-                Language = language,
-                Group = group,
-                Severity = severity,
-                Executable = executable,
-                Description = description,
-
-                Id = editorQueryId,
-                Level = level,
-                Path = path,
-                Presets = presets,
-                SastId = sastId,
-
-                Source = source
-            };
-
-            return requestQueryCreation(session, createBody);
-        }
-
-        private string updateQuerySourceByEditorQuery(Guid session, string editorQueryId, string source)
-        {
-            var createQueryResult = QueryEditor.PutQuerySourceAsync(session, new List<Services.QueryEditor.AuditQuery>() { new Services.QueryEditor.AuditQuery() { Id = editorQueryId, Source = source } }).Result;
-
-            bool completed = false;
-            string id = null;
-            while (!completed)
-            {
-                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
-
-                var status = QueryEditor.CheckRequestStatusAsync(session, createQueryResult.Id).Result;
-
-                if (status.Completed)
-                {
-                    completed = true;
-                    if (status.Status == RequestStatusStatus.Finished)
-                        id = status.Value?.Id;
-                    else
-                        throw new Exception($"Error updating query source with key {editorQueryId}. Message: \"{status.Value.Message}\"");
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(id))
-                throw new Exception($"Unknown error updating query source with key {editorQueryId}");
-
-            return id;
-        }
-
-        private string requestQueryCreation(Guid session, CreateQueryRequest createBody)
-        {
-            var createQueryResult = QueryEditor.CreateQueryAsync(createBody, session).Result;
-
-            bool completed = false;
-            string id = null;
-            while (!completed)
-            {
-                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
-
-                var status = QueryEditor.CheckRequestStatusAsync(session, createQueryResult.Id).Result;
-
-                if (status.Completed)
-                {
-                    completed = true;
-                    if (status.Status == RequestStatusStatus.Finished)
-                        id = status.Value?.Id;
-                    else
-                        throw new Exception($"Error creating query {createBody.Language} {createBody.Name} with status \"{status.Status.ToString()}\". Message: \"{status.Value.Message}\"");
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(id))
-                throw new Exception($"Unknown error creating query {createBody.Language} {createBody.Name}");
-
-            return id;
-        }
-
-        private bool deleteQueryWithSessionId(Guid session, string editorQueryId)
-        {
-            if (session == Guid.Empty)
-                throw new ArgumentNullException(nameof(session));
-
-            if (string.IsNullOrWhiteSpace(editorQueryId))
-                throw new ArgumentNullException(nameof(editorQueryId));
-
-            var deleteQueryResult = QueryEditor.DeleteQueryAsync(session, editorQueryId).Result;
-
-            bool completed = false;
-            while (!completed)
-            {
-                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
-
-                var status = QueryEditor.CheckRequestStatusAsync(session, deleteQueryResult.Id).Result;
-
-                if (status.Completed)
-                {
-                    completed = true;
-                    if (status.Status != RequestStatusStatus.Finished)
-                        throw new Exception($"Error deleting query with status \"{status.Status.ToString()}\". Message: \"{status.Value.Message}\"");
-                }
-            }
-
-            return true;
-        }
-
-        #endregion
 
         #endregion
 
@@ -4427,7 +3380,7 @@ namespace Checkmarx.API.AST
             string token = authenticate();
             string serverRestEndpoint = $"{ASTServer.AbsoluteUri}api/logs/{scanId}/{engine}";
 
-            using (var handler = new HttpClientHandler { AllowAutoRedirect = false })
+            using (var handler = new RequestDescriptionHandler(new HttpClientHandler { AllowAutoRedirect = false }))
             using (var client = new HttpClient(handler))
             {
                 client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
