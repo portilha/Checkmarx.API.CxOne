@@ -208,13 +208,31 @@ namespace Checkmarx.API.AST.Tests
         [TestMethod]
         public void MarkSASTResultTest()
         {
-            astClient.MarkSASTResult(ProjectId,
-                                     "-203301157",
-                                     ResultsSeverity.HIGH,
-                                     ResultsState.CONFIRMED.ToString(),
-                                     Guid.Empty,
-                                     null);
+            Guid scanId = new Guid("0d26e8cf-35b6-4af5-8bf3-36da71aafa31");
 
+            string comment = astClient.IsMandatoryCommentWhenChangingState() ? "This is a test comment for marking the SAST result." : null;
+
+            var result = astClient.GetSASTScanResultsById(scanId).Single();
+
+            var resultsGroupingSetting = astClient.GetAdvancedTriageMode();
+            if (resultsGroupingSetting == ASTClient.AdvancedTriageMode.SimilarityID)
+            {
+                astClient.MarkSASTResult(ProjectId,
+                                     result.SimilarityID,
+                                     ResultsSeverity.HIGH,
+                                     ResultsState.URGENT.ToString(),
+                                     scanId,
+                                     comment);
+            }
+            else if (resultsGroupingSetting == ASTClient.AdvancedTriageMode.AttackVectorID)
+            {
+                astClient.MarkSASTResultByAttackVector(ProjectId,
+                                     result.AttackVectorID,
+                                     ResultsSeverity.HIGH,
+                                     ResultsState.URGENT.ToString(),
+                                     scanId,
+                                     comment);
+            }
         }
 
 

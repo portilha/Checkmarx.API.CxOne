@@ -33,6 +33,7 @@ using Polly.Timeout;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Data;
 using System.Globalization;
 using System.IO;
@@ -71,6 +72,8 @@ namespace Checkmarx.API.AST
         public const string RecommendedExclusionsConfiguration = "scan.config.sast.recommendedExclusions";
         public const string IsIncrementalConfiguration = "scan.config.sast.incremental";
         public const string SettingsResultsScopeLevel = "scan.config.sast.resultsScopeLevel";
+        public const string SettingsAdvancedTriageMode = "scan.config.sast.advancedTriageMode";
+        public const string SettingsMandatoryCommentWhenChangingState = "scan.config.sast.mandatoryCommentWhenChangingState";
 
 
         public const string SAST_Engine = "sast";
@@ -83,6 +86,11 @@ namespace Checkmarx.API.AST
         public const string Query_Level_Tenant = "Tenant";
         public const string Query_Level_Application = "Application";
         public const string Query_Level_Project = "Project";
+
+        // Re-exported because QueryEditorClient is internal — this is the one public source of truth
+        // for the tenant-wide query editor session budget every caller opening sessions in a loop
+        // (here, CxOneInstance, CxOneDevOps) should cap its own parallelism to.
+        public const int MaxConcurrentQuerySessions = QueryEditorClient.MaxConcurrentSessions;
 
         public const string Feature_Flag_CustomStatesEnabled = "CUSTOM_STATES_ENABLED";
 
@@ -564,7 +572,13 @@ namespace Checkmarx.API.AST
             get
             {
                 if (Connected && _SASTResults == null)
-                    _SASTResults = new SASTResults(ASTServer, _httpClient);
+                    // ReadResponseAsString: on a deserialization failure the default stream-based path
+                    // never captures the raw body, so ApiException.Response is always empty — makes any
+                    // "Could not deserialize..." error impossible to diagnose. Buffering the body as a
+                    // string first costs one extra copy of the JSON in memory per call (bounded by the
+                    // page size, capped at 500 results), which is an acceptable trade for actually seeing
+                    // what the server sent back.
+                    _SASTResults = new SASTResults(ASTServer, _httpClient) { ReadResponseAsString = true };
 
                 return _SASTResults;
             }
@@ -1892,6 +1906,38 @@ namespace Checkmarx.API.AST
             return JsonConvert.DeserializeObject<ReportResults>(reportString);
         }
 
+        /// <summary>
+        /// Every column the "visible-columns" query parameter needs to request in order for the response
+        /// to include everything the <see cref="SASTResult"/> DTO exposes. The API only returns the columns
+        /// listed here once this parameter is set at all (it replaces the server's own default set, it does
+        /// not add to it), so this list must be kept in sync with the properties of <see cref="SASTResult"/>.
+        /// </summary>
+        private static readonly VisibleColumnsEnum[] SASTResultVisibleColumns =
+        [
+            VisibleColumnsEnum.ResultId,
+            VisibleColumnsEnum.PathSystemId,
+            VisibleColumnsEnum.QueryIds,
+            VisibleColumnsEnum.QueryName,
+            VisibleColumnsEnum.Language,
+            VisibleColumnsEnum.Group,
+            VisibleColumnsEnum.CweId,
+            VisibleColumnsEnum.Severity,
+            VisibleColumnsEnum.SimilarityId,
+            VisibleColumnsEnum.AttackVectorId,
+            VisibleColumnsEnum.ConfidenceLevel,
+            VisibleColumnsEnum.Compliance,
+            VisibleColumnsEnum.FirstTimeScanId,
+            VisibleColumnsEnum.FirstFoundAt,
+            VisibleColumnsEnum.FirstAt,
+            VisibleColumnsEnum.Status,
+            VisibleColumnsEnum.Nodes,
+            VisibleColumnsEnum.State,
+            VisibleColumnsEnum.ChangeDetails,
+            VisibleColumnsEnum.ProjectId,
+            VisibleColumnsEnum.TenantId,
+            VisibleColumnsEnum.CvssScore,
+        ];
+
         public IEnumerable<SASTResult> GetSASTScanResultsById(Guid scanId, int startAt = 0, int limit = 500)
         {
             if (startAt < 0)
@@ -1903,7 +1949,7 @@ namespace Checkmarx.API.AST
 
             while (true)
             {
-                Services.SASTResults.SASTResultsResponse response = SASTResults.GetSASTResultsByScanAsync(scanId, startAt, limit).Result;
+                Services.SASTResults.SASTResultsResponse response = SASTResults.GetSASTResultsByScanAsync(scanId, startAt, limit, visible_columns: SASTResultVisibleColumns).Result;
 
                 if (response.Results != null)
                 {
@@ -2246,6 +2292,98 @@ namespace Checkmarx.API.AST
                 newBody.Comment = comment;
 
             SASTResultsPredicates.PredicateBySimiliartyIdAndProjectIdAsync(new PredicateBySimiliartyIdBody[] { newBody }).Wait();
+        }
+
+        public void MarkSASTResultByAttackVector(Guid projectId, string attackVectorId, ResultsSeverity severity, string state, Guid scanId, string comment = null,
+            string filterBySimilarityId = null, bool allowInconsistentStates = false)
+        {
+            if (projectId == Guid.Empty)
+                throw new ArgumentException(nameof(projectId));
+
+            if (string.IsNullOrWhiteSpace(attackVectorId))
+                throw new ArgumentNullException(nameof(attackVectorId));
+
+            PredicateByAttackVectorIdBody newBody = new PredicateByAttackVectorIdBody
+            {
+                AttackVectorId = attackVectorId,
+                ProjectId = projectId,
+                ScanId = scanId,
+                Severity = severity,
+                FilterBySimilarityId = filterBySimilarityId,
+                AllowInconsistentStates = allowInconsistentStates
+            };
+
+            var sastState = SASTStates.SingleOrDefault(x => x.Name.Equals(state, StringComparison.InvariantCultureIgnoreCase));
+            if (sastState.State.HasValue)
+                newBody.State = sastState.State.Value.ToString();
+            else
+                newBody.CustomStateId = sastState.Id;
+
+            if (!string.IsNullOrWhiteSpace(comment))
+                newBody.Comment = comment;
+
+            SASTResultsPredicates.PredicateByAttackVectorIdAsync(new PredicateByAttackVectorIdBody[] { newBody }).Wait();
+        }
+
+        public bool MarkSASTResultByAttackVector(Guid projectId, SASTResult result, PredicateHistoryWithAttackVector history, bool updateSeverity = true,
+            bool updateState = true, bool updateComment = true, Guid? scanId = null)
+        {
+            if (projectId == Guid.Empty)
+                throw new ArgumentException(nameof(projectId));
+
+            if (history == null)
+                throw new NullReferenceException(nameof(history));
+
+            if (result == null)
+                throw new ArgumentNullException(nameof(result));
+
+            if (string.IsNullOrWhiteSpace(history.AttackVectorId))
+                throw new ArgumentException($"{nameof(history)}.{nameof(history.AttackVectorId)} is required.", nameof(history));
+
+            if (history.Predicates == null)
+                return false;
+
+            List<PredicateByAttackVectorIdBody> body = [];
+
+            foreach (var predicate in history.Predicates)
+            {
+                PredicateByAttackVectorIdBody newBody = new PredicateByAttackVectorIdBody
+                {
+                    AttackVectorId = history.AttackVectorId,
+                    ProjectId = projectId,
+                    ScanId = scanId,
+                    Severity = updateSeverity ? predicate.Severity : result.Severity,
+                    Comment = updateComment ? predicate.Comment : null,
+                    FilterBySimilarityId = predicate.SimilarityId
+                };
+
+                if (updateState)
+                {
+                    var predicateState = SASTStates.SingleOrDefault(x => x.Name.Equals(predicate.State, StringComparison.InvariantCultureIgnoreCase));
+                    if (predicateState?.State.HasValue == true)
+                        newBody.State = predicateState.State.Value.ToString();
+                    else if (predicateState != null)
+                        newBody.CustomStateId = predicateState.Id;
+                }
+                else
+                {
+                    var sastState = SASTStates.SingleOrDefault(x => x.Name.Equals(result.State, StringComparison.InvariantCultureIgnoreCase));
+                    if (sastState.State.HasValue)
+                        newBody.State = sastState.State.Value.ToString();
+                    else
+                        newBody.CustomStateId = sastState.Id;
+                }
+
+                body.Add(newBody);
+            }
+
+            if (body.Any())
+            {
+                SASTResultsPredicates.PredicateByAttackVectorIdAsync(body).Wait();
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -2597,6 +2735,56 @@ namespace Checkmarx.API.AST
             };
 
             Configuration.UpdateTenantConfigurationAsync(body).Wait();
+        }
+
+        public enum AdvancedTriageMode
+        {
+            [Description("Similarity ID")]
+            SimilarityID,
+
+            [Description("Attack Vector ID")]
+            AttackVectorID
+        }
+
+        public AdvancedTriageMode GetAdvancedTriageMode()
+        {
+            var configs = GetTenantConfigurations();
+
+            if (!configs.TryGetValue(SettingsAdvancedTriageMode, out var config) ||
+                string.IsNullOrEmpty(config?.Value))
+            {
+                return AdvancedTriageMode.SimilarityID;
+            }
+
+            return EnumUtils.GetEnumValueByDescription<AdvancedTriageMode>(config.Value);
+        }
+
+        public void SetAdvancedTriageMode(AdvancedTriageMode mode)
+        {
+            List<ScanParameter> body = new List<ScanParameter>()
+            {
+                new ScanParameter()
+                {
+                    Key = SettingsAdvancedTriageMode,
+                    Value = mode.GetDescription(),
+                    AllowOverride = false
+                }
+            };
+
+            Configuration.UpdateTenantConfigurationAsync(body).Wait();
+        }
+
+        public bool IsMandatoryCommentWhenChangingState()
+        {
+            var configs = GetTenantConfigurations();
+
+            if (!configs.TryGetValue(SettingsMandatoryCommentWhenChangingState, out var config) ||
+                string.IsNullOrEmpty(config?.Value))
+            {
+                return false;
+            }
+
+            return bool.TryParse(config.Value, out var result) && result;
         }
 
         public string GetProjectRepoUrl(Guid projectId) => GetProjectConfig(projectId, SettingsProjectRepoUrl);
