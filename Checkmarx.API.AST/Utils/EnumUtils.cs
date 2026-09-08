@@ -35,6 +35,14 @@ namespace Checkmarx.API.AST.Utils
             throw new InvalidOperationException($"'{description}' is not a valid {typeof(T).Name}.");
         }
 
+        public static string GetDescription(this Enum value)
+        {
+            var field = value.GetType().GetField(value.ToString());
+            var attribute = field.GetCustomAttribute<DescriptionAttribute>();
+
+            return attribute?.Description ?? value.ToString();
+        }
+
         public static List<ResultState> GetStateEnumMemberList<T>() where T : Enum
         {
             if (typeof(T) == typeof(ResultsState))

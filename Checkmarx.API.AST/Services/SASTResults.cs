@@ -918,6 +918,21 @@ namespace Checkmarx.API.AST.Services.SASTResults
         [System.Runtime.Serialization.EnumMember(Value = @"tenant-id")]
         TenantId = 33,
 
+        [System.Runtime.Serialization.EnumMember(Value = @"attack-vector-id")]
+        AttackVectorId = 34,
+
+        [System.Runtime.Serialization.EnumMember(Value = @"bfl-name")]
+        BflName = 35,
+
+        [System.Runtime.Serialization.EnumMember(Value = @"confidence-score")]
+        ConfidenceScore = 36,
+
+        [System.Runtime.Serialization.EnumMember(Value = @"changed-by")]
+        ChangedBy = 37,
+
+        [System.Runtime.Serialization.EnumMember(Value = @"is-ai-generated")]
+        IsAiGenerated = 38,
+
     }
 
     [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.8.0 (NJsonSchema v11.0.1.0 (Newtonsoft.Json v13.0.0.0))")]
@@ -987,6 +1002,16 @@ namespace Checkmarx.API.AST.Services.SASTResults
         /// </summary>
         [Newtonsoft.Json.JsonProperty("similarityID", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
         public string SimilarityID { get; set; }
+
+        /// <summary>
+        /// The attack vector identifier associated with this result. Either entirely absent (tenants
+        /// without attack-vector-based grouping) or present as an explicit JSON null (a result the
+        /// server hasn't computed an attack vector for yet) — Required.Default is the only setting
+        /// that tolerates both; DisallowNull rejects an explicit null and AllowNull requires the key
+        /// to be present at all.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("attackVectorID", Required = Newtonsoft.Json.Required.Default, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string AttackVectorID { get; set; }
 
         [Newtonsoft.Json.JsonProperty("uniqueID", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
         [System.Obsolete]

@@ -152,30 +152,30 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                             return objectResponse_.Object;
                         }
                         else
-                        if (status_ == 400)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 400)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        if (status_ == 401)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
-                            {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
-                            }
-                            throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        {
-                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
-                        }
+                            else
+                                if (status_ == 401)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                {
+                                    var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                    throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                }
                     }
                     finally
                     {
@@ -272,30 +272,194 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                             return objectResponse_.Object;
                         }
                         else
-                        if (status_ == 400)
+                            if (status_ == 400)
+                            {
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                            }
+                            else
+                                if (status_ == 401)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                {
+                                    var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                    throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                }
+                    }
+                    finally
+                    {
+                        if (disposeResponse_)
+                            response_.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                if (disposeClient_)
+                    client_.Dispose();
+            }
+        }
+
+        /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
+        /// <summary>
+        /// get all predicates by attack vector ID
+        /// </summary>
+        /// <remarks>
+        /// get all predicates for attack vector ID
+        /// </remarks>
+        /// <param name="authorization">REQUIRED: JWT authorization token</param>
+        /// <param name="accept">API version should be appended to this header</param>
+        /// <param name="correlationId">correlation id to keep track of a flow if many APIs are involved</param>
+        /// <param name="attackVectorID">ID of the Attack vector to get</param>
+        /// <param name="similarityID">filter by similarity ID identifier</param>
+        /// <param name="project_ids">filter by project-ids. OR operator between the items. if not set will return all projects.</param>
+        /// <param name="scanID">ID of the scan this predicate is submitted for (optional).</param>
+        /// <param name="include_comment_json">if true, will include the comment's JSON data in the response.</param>
+        /// <param name="include_changed_by">if true, will include the changed-by and triggered-by fields in the response.</param>
+        /// <returns>successful operation</returns>
+        /// <exception cref="ApiException">A server side error occurred.</exception>
+        public virtual async System.Threading.Tasks.Task<ResponseWithAttackVector> GetPredicatesByAttackVectorIDAsync(string attackVectorID, string similarityID = null, System.Collections.Generic.IEnumerable<Guid> project_ids = null, string scanID = null, string authorization = null, string accept = null, System.Guid? correlationId = null, bool? include_comment_json = null, bool? include_changed_by = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        {
+            if (attackVectorID == null)
+                throw new System.ArgumentNullException("attackVectorID");
+
+            var client_ = _httpClient;
+            var disposeClient_ = false;
+            try
+            {
+                using (var request_ = new System.Net.Http.HttpRequestMessage())
+                {
+
+                    if (authorization != null)
+                        request_.Headers.TryAddWithoutValidation("Authorization", ConvertToString(authorization, System.Globalization.CultureInfo.InvariantCulture));
+
+                    if (accept != null)
+                        request_.Headers.TryAddWithoutValidation("Accept", ConvertToString(accept, System.Globalization.CultureInfo.InvariantCulture));
+
+                    if (correlationId != null)
+                        request_.Headers.TryAddWithoutValidation("CorrelationId", ConvertToString(correlationId, System.Globalization.CultureInfo.InvariantCulture));
+                    request_.Method = new System.Net.Http.HttpMethod("GET");
+
+                    var urlBuilder_ = new System.Text.StringBuilder();
+                    if (!string.IsNullOrEmpty(_baseUrl)) urlBuilder_.Append(_baseUrl);
+                    // Operation Path: ""
+                    urlBuilder_.Append('?');
+                    urlBuilder_.Append(System.Uri.EscapeDataString("attack-vector-id")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(attackVectorID, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    if (similarityID != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("similarity-id")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(similarityID, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (project_ids != null)
+                    {
+                        foreach (var item_ in project_ids) { urlBuilder_.Append(System.Uri.EscapeDataString("project-ids")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(item_, System.Globalization.CultureInfo.InvariantCulture))).Append('&'); }
+                    }
+                    if (scanID != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("scan-id")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(scanID, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (include_comment_json != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("include-comment-json")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(include_comment_json, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    if (include_changed_by != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("include-changed-by")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(include_changed_by, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    urlBuilder_.Length--;
+
+                    PrepareRequest(client_, request_, urlBuilder_);
+
+                    var url_ = urlBuilder_.ToString();
+                    request_.RequestUri = new System.Uri(url_, System.UriKind.RelativeOrAbsolute);
+
+                    PrepareRequest(client_, request_, url_);
+
+                    var response_ = await _retryPolicy.ExecuteAsync(() => client_.SendAsync(CloneHttpRequestMessage(request_), System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cancellationToken)).ConfigureAwait(false);
+                    var disposeResponse_ = true;
+                    try
+                    {
+                        var headers_ = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IEnumerable<string>>();
+                        foreach (var item_ in response_.Headers)
+                            headers_[item_.Key] = item_.Value;
+                        if (response_.Content != null && response_.Content.Headers != null)
                         {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                            foreach (var item_ in response_.Content.Headers)
+                                headers_[item_.Key] = item_.Value;
+                        }
+
+                        ProcessResponse(client_, response_);
+
+#if DEBUG
+                        var content = await response_.Content.ReadAsStringAsync();
+                        Trace.WriteLine(content);
+#endif
+
+                        var status_ = (int)response_.StatusCode;
+                        if (status_ == 200)
+                        {
+                            var objectResponse_ = await ReadObjectResponseAsync<ResponseWithAttackVector>(response_, headers_, cancellationToken).ConfigureAwait(false);
                             if (objectResponse_.Object == null)
                             {
                                 throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
                             }
-                            throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                            return objectResponse_.Object;
                         }
                         else
-                        if (status_ == 401)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 400)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        {
-                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
-                        }
+                            else
+                                if (status_ == 401)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                    if (status_ == 403)
+                                    {
+                                        var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                        if (objectResponse_.Object == null)
+                                        {
+                                            throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                        }
+                                        throw new ApiException<WebError>("Forbidden.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                    }
+                                    else
+                                        if (status_ == 404)
+                                        {
+                                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                            if (objectResponse_.Object == null)
+                                            {
+                                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                            }
+                                            throw new ApiException<WebError>("No predicates found for the given criteria.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                        }
+                                        else
+                                        {
+                                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                        }
                     }
                     finally
                     {
@@ -323,7 +487,7 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
         /// <param name="correlationId">correlation id to keep track of a flow if many APIs are involved</param>
         /// <returns>successful operation</returns>
         /// <exception cref="ApiException">A server side error occurred.</exception>
-        public virtual async System.Threading.Tasks.Task PredicateBySimiliartyIdAndProjectIdAsync(System.Collections.Generic.IEnumerable<PredicateBySimiliartyIdBody> body, string authorization = null, string accept = null, System.Guid? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        public virtual async System.Threading.Tasks.Task PredicateBySimiliartyIdAndProjectIdAsync(System.Collections.Generic.IEnumerable<PredicateBySimiliartyIdBody> body, bool? allowAITriageCancellation = null, string authorization = null, string accept = null, System.Guid? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var client_ = _httpClient;
             var disposeClient_ = false;
@@ -354,6 +518,12 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                     var urlBuilder_ = new System.Text.StringBuilder();
                     if (!string.IsNullOrEmpty(_baseUrl)) urlBuilder_.Append(_baseUrl);
                     // Operation Path: ""
+                    urlBuilder_.Append('?');
+                    if (allowAITriageCancellation != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("allowAITriageCancellation")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(allowAITriageCancellation, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    urlBuilder_.Length--;
 
                     PrepareRequest(client_, request_, urlBuilder_);
 
@@ -383,30 +553,198 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                             return;
                         }
                         else
-                        if (status_ == 401)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 401)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                            else
+                                if (status_ == 400)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                    if (status_ == 409)
+                                    {
+                                        var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                        if (objectResponse_.Object == null)
+                                        {
+                                            throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                        }
+                                        throw new ApiException<WebError>("Conflict. Active AI Triage operations exist for one or more results.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                    }
+                                    else
+                                    {
+                                        var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                        throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                    }
+                    }
+                    finally
+                    {
+                        if (disposeResponse_)
+                            response_.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                if (disposeClient_)
+                    client_.Dispose();
+            }
+        }
+
+        /// <param name="cancellationToken">A cancellation token that can be used by other objects or threads to receive notice of cancellation.</param>
+        /// <summary>
+        /// Create predicates by attack vector ID with bulk updates
+        /// </summary>
+        /// <remarks>
+        /// Creates new predicate entries for SAST results by attack vector ID. Supports bulk updates across all similarity groups or filtered updates for a specific similarity group.
+        /// </remarks>
+        /// <param name="authorization">REQUIRED: JWT authorization token</param>
+        /// <param name="accept">API version should be appended to this header</param>
+        /// <param name="correlationId">correlation id to keep track of a flow if many APIs are involved</param>
+        /// <returns>Predicates processed successfully.</returns>
+        /// <exception cref="ApiException">A server side error occurred.</exception>
+        public virtual async System.Threading.Tasks.Task PredicateByAttackVectorIdAsync(System.Collections.Generic.IEnumerable<PredicateByAttackVectorIdBody> body, bool? allowAITriageCancellation = null, string authorization = null, string accept = null, System.Guid? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
+        {
+            var client_ = _httpClient;
+            var disposeClient_ = false;
+            try
+            {
+                using (var request_ = new System.Net.Http.HttpRequestMessage())
+                {
+
+                    if (authorization != null)
+                        request_.Headers.TryAddWithoutValidation("Authorization", ConvertToString(authorization, System.Globalization.CultureInfo.InvariantCulture));
+
+                    if (accept != null)
+                        request_.Headers.TryAddWithoutValidation("Accept", ConvertToString(accept, System.Globalization.CultureInfo.InvariantCulture));
+
+                    if (correlationId != null)
+                        request_.Headers.TryAddWithoutValidation("CorrelationId", ConvertToString(correlationId, System.Globalization.CultureInfo.InvariantCulture));
+                    var json_ = Newtonsoft.Json.JsonConvert.SerializeObject(body, _settings.Value);
+                    var content_ = new System.Net.Http.StringContent(json_);
+
+#if DEBUG
+                    System.Diagnostics.Trace.WriteLine(json_);
+#endif
+
+                    content_.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse("application/json");
+                    request_.Content = content_;
+                    request_.Method = new System.Net.Http.HttpMethod("POST");
+
+                    var urlBuilder_ = new System.Text.StringBuilder();
+                    if (!string.IsNullOrEmpty(_baseUrl)) urlBuilder_.Append(_baseUrl.TrimEnd('/'));
+                    // Operation Path: "attack-vector"
+                    urlBuilder_.Append("/attack-vector");
+                    urlBuilder_.Append('?');
+                    if (allowAITriageCancellation != null)
+                    {
+                        urlBuilder_.Append(System.Uri.EscapeDataString("allowAITriageCancellation")).Append('=').Append(System.Uri.EscapeDataString(ConvertToString(allowAITriageCancellation, System.Globalization.CultureInfo.InvariantCulture))).Append('&');
+                    }
+                    urlBuilder_.Length--;
+
+                    PrepareRequest(client_, request_, urlBuilder_);
+
+                    var url_ = urlBuilder_.ToString();
+                    request_.RequestUri = new System.Uri(url_, System.UriKind.RelativeOrAbsolute);
+
+                    PrepareRequest(client_, request_, url_);
+
+                    var response_ = await _retryPolicy.ExecuteAsync(() => client_.SendAsync(CloneHttpRequestMessage(request_), System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cancellationToken)).ConfigureAwait(false);
+                    var disposeResponse_ = true;
+                    try
+                    {
+                        var headers_ = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IEnumerable<string>>();
+                        foreach (var item_ in response_.Headers)
+                            headers_[item_.Key] = item_.Value;
+                        if (response_.Content != null && response_.Content.Headers != null)
+                        {
+                            foreach (var item_ in response_.Content.Headers)
+                                headers_[item_.Key] = item_.Value;
+                        }
+
+                        ProcessResponse(client_, response_);
+
+                        var status_ = (int)response_.StatusCode;
+                        if (status_ == 201)
+                        {
+                            return;
                         }
                         else
-                        if (status_ == 400)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<Response3>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 400)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<Response3>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        {
-                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
-                        }
+                            else
+                                if (status_ == 403)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Forbidden. Missing permission.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                    if (status_ == 404)
+                                    {
+                                        var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                        if (objectResponse_.Object == null)
+                                        {
+                                            throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                        }
+                                        throw new ApiException<WebError>("Attack vector ID not found or no results available.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                    }
+                                    else
+                                        if (status_ == 405)
+                                        {
+                                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                            if (objectResponse_.Object == null)
+                                            {
+                                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                            }
+                                            throw new ApiException<WebError>("Method not allowed. Advanced grouping by attack vector is disabled.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                        }
+                                        else
+                                            if (status_ == 409)
+                                            {
+                                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                                if (objectResponse_.Object == null)
+                                                {
+                                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                                }
+                                                throw new ApiException<WebError>("Conflict. Inconsistent states across similarity groups or active AI Triage operations exist.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                            }
+                                            else
+                                                if (status_ == 503)
+                                                {
+                                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                                    if (objectResponse_.Object == null)
+                                                    {
+                                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                                    }
+                                                    throw new ApiException<WebError>("Service unavailable. The AI Triage agent could not be reached.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                                }
+                                                else
+                                                {
+                                                    var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                                    throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                                }
                     }
                     finally
                     {
@@ -489,40 +827,40 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                             return;
                         }
                         else
-                        if (status_ == 401)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 401)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Unauthorized", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<WebError>("Unauthorized", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        if (status_ == 400)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<Response4>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
-                            {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
-                            }
-                            throw new ApiException<Response4>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        if (status_ == 404)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<Response5>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
-                            {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
-                            }
-                            throw new ApiException<Response5>("Not found", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        {
-                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
-                        }
+                            else
+                                if (status_ == 400)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                    if (status_ == 404)
+                                    {
+                                        var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                        if (objectResponse_.Object == null)
+                                        {
+                                            throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                        }
+                                        throw new ApiException<WebError>("Not found", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                    }
+                                    else
+                                    {
+                                        var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                        throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                    }
                     }
                     finally
                     {
@@ -605,30 +943,30 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                             return;
                         }
                         else
-                        if (status_ == 401)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 401)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        if (status_ == 400)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<Response6>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
-                            {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
-                            }
-                            throw new ApiException<Response6>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        {
-                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
-                        }
+                            else
+                                if (status_ == 400)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                {
+                                    var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                    throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                }
                     }
                     finally
                     {
@@ -723,40 +1061,40 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
                             return;
                         }
                         else
-                        if (status_ == 400)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
+                            if (status_ == 400)
                             {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                if (objectResponse_.Object == null)
+                                {
+                                    throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                }
+                                throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
                             }
-                            throw new ApiException<WebError>("Invalid request supplied.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        if (status_ == 401)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
-                            {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
-                            }
-                            throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        if (status_ == 404)
-                        {
-                            var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
-                            if (objectResponse_.Object == null)
-                            {
-                                throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
-                            }
-                            throw new ApiException<WebError>("Predicate history not found.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
-                        }
-                        else
-                        {
-                            var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
-                        }
+                            else
+                                if (status_ == 401)
+                                {
+                                    var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                    if (objectResponse_.Object == null)
+                                    {
+                                        throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                    }
+                                    throw new ApiException<WebError>("Unauthorized.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                }
+                                else
+                                    if (status_ == 404)
+                                    {
+                                        var objectResponse_ = await ReadObjectResponseAsync<WebError>(response_, headers_, cancellationToken).ConfigureAwait(false);
+                                        if (objectResponse_.Object == null)
+                                        {
+                                            throw new ApiException("Response was null which was not expected.", status_, objectResponse_.Text, headers_, null);
+                                        }
+                                        throw new ApiException<WebError>("Predicate history not found.", status_, objectResponse_.Text, headers_, objectResponse_.Object, null);
+                                    }
+                                    else
+                                    {
+                                        var responseData_ = response_.Content == null ? null : await response_.Content.ReadAsStringAsync().ConfigureAwait(false);
+                                        throw new ApiException("The HTTP status code of the response was not expected (" + status_ + ").", status_, responseData_, headers_, null);
+                                    }
                     }
                     finally
                     {
@@ -906,6 +1244,74 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
 
         [Newtonsoft.Json.JsonProperty("totalCount", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
         public int TotalCount { get; set; }
+
+        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
+
+        [Newtonsoft.Json.JsonExtensionData]
+        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
+        {
+            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
+            set { _additionalProperties = value; }
+        }
+
+    }
+
+    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
+    public partial class PredicateHistoryWithAttackVector
+    {
+        /// <summary>
+        /// ID of the related project ID.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("projectId", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string ProjectId { get; set; }
+
+        /// <summary>
+        /// ID of the related similarity ID.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("similarityId", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string SimilarityId { get; set; }
+
+        /// <summary>
+        /// ID of the related attack vector (16-character hexadecimal).
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("attackVectorId", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string AttackVectorId { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("predicates", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public System.Collections.Generic.ICollection<PredicateWithCommentJSON> Predicates { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("totalCount", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public int TotalCount { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("initialPredicateValues", Required = Newtonsoft.Json.Required.Default, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public InitialPredicateValues InitialPredicateValues { get; set; }
+
+        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
+
+        [Newtonsoft.Json.JsonExtensionData]
+        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
+        {
+            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
+            set { _additionalProperties = value; }
+        }
+
+    }
+
+    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
+    public partial class InitialPredicateValues
+    {
+        /// <summary>
+        /// state enum of a result.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("state", Required = Newtonsoft.Json.Required.Default, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string State { get; set; }
+
+        /// <summary>
+        /// The severity of the vulnerability
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("severity", Required = Newtonsoft.Json.Required.Default, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        [Newtonsoft.Json.JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]
+        public ResultsSeverity? Severity { get; set; }
 
         private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
 
@@ -1231,6 +1637,66 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
     }
 
     [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
+    public partial class PredicateByAttackVectorIdBody
+    {
+        /// <summary>
+        /// Attack vector identifier - 16-character hexadecimal string representing a 64-bit hash.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("attackVectorId", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Include)]
+        public string AttackVectorId { get; set; }
+
+        /// <summary>
+        /// ID of the related project ID
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("projectId", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Include)]
+        public Guid ProjectId { get; set; }
+
+        /// <summary>
+        /// ID of the related scan ID
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("scanId", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Include)]
+        public Guid? ScanId { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("severity", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Include)]
+        [Newtonsoft.Json.JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]
+        public Checkmarx.API.AST.Services.SASTResults.ResultsSeverity Severity { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("state", Required = Newtonsoft.Json.Required.AllowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string State { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("customStateId", Required = Newtonsoft.Json.Required.AllowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public long? CustomStateId { get; set; }
+
+        /// <summary>
+        /// comment that describe why the state has predicated
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("comment", Required = Newtonsoft.Json.Required.AllowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Include)]
+        public string Comment { get; set; }
+
+        /// <summary>
+        /// Filters the update to a specific similarity group within the attack vector.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("filterBySimilarityId", Required = Newtonsoft.Json.Required.AllowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string FilterBySimilarityId { get; set; }
+
+        /// <summary>
+        /// Allow updates even when similarity groups within the attack vector have different states.
+        /// </summary>
+        [Newtonsoft.Json.JsonProperty("allowInconsistentStates", Required = Newtonsoft.Json.Required.Default, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public bool? AllowInconsistentStates { get; set; }
+
+        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
+
+        [Newtonsoft.Json.JsonExtensionData]
+        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
+        {
+            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
+            set { _additionalProperties = value; }
+        }
+
+    }
+
+    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
     public partial class UpdatePredicateCommentBody
     {
         /// <summary>
@@ -1315,6 +1781,26 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
 
     }
 
+    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
+    public partial class ResponseWithAttackVector
+    {
+        [Newtonsoft.Json.JsonProperty("predicateHistoryPerProject", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public System.Collections.Generic.ICollection<PredicateHistoryWithAttackVector> PredicateHistoryPerProject { get; set; }
+
+        [Newtonsoft.Json.JsonProperty("totalCount", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public int TotalCount { get; set; }
+
+        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
+
+        [Newtonsoft.Json.JsonExtensionData]
+        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
+        {
+            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
+            set { _additionalProperties = value; }
+        }
+
+    }
+
 
 
     [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
@@ -1337,97 +1823,6 @@ namespace Checkmarx.API.AST.Services.SASTResultsPredicates
 
     }
 
-    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
-    public partial class Response3
-    {
-        [Newtonsoft.Json.JsonProperty("code", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public int Code { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("message", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public string Message { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("data", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public object Data { get; set; }
-
-        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
-
-        [Newtonsoft.Json.JsonExtensionData]
-        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
-        {
-            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
-            set { _additionalProperties = value; }
-        }
-
-    }
-
-    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
-    public partial class Response4
-    {
-        [Newtonsoft.Json.JsonProperty("code", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public int Code { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("message", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public string Message { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("data", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public object Data { get; set; }
-
-        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
-
-        [Newtonsoft.Json.JsonExtensionData]
-        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
-        {
-            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
-            set { _additionalProperties = value; }
-        }
-
-    }
-
-    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
-    public partial class Response5
-    {
-        [Newtonsoft.Json.JsonProperty("code", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public int Code { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("message", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public string Message { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("data", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public object Data { get; set; }
-
-        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
-
-        [Newtonsoft.Json.JsonExtensionData]
-        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
-        {
-            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
-            set { _additionalProperties = value; }
-        }
-
-    }
-
-    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.2.0.0 (NJsonSchema v11.1.0.0 (Newtonsoft.Json v13.0.0.0))")]
-    public partial class Response6
-    {
-        [Newtonsoft.Json.JsonProperty("code", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public int Code { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("message", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public string Message { get; set; }
-
-        [Newtonsoft.Json.JsonProperty("data", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
-        public object Data { get; set; }
-
-        private System.Collections.Generic.IDictionary<string, object> _additionalProperties;
-
-        [Newtonsoft.Json.JsonExtensionData]
-        public System.Collections.Generic.IDictionary<string, object> AdditionalProperties
-        {
-            get { return _additionalProperties ?? (_additionalProperties = new System.Collections.Generic.Dictionary<string, object>()); }
-            set { _additionalProperties = value; }
-        }
-
-    }
 
 
     [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.0.3.0 (NJsonSchema v11.0.0.0 (Newtonsoft.Json v13.0.0.0))")]
