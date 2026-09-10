@@ -211,15 +211,23 @@ namespace Checkmarx.API.AST.Tests
         [TestMethod]
         public void CreateQueryForTenantTest()
         {
-            //string language = "CSharp";
-            //string name = "Test_Query_To_Delete";
-            //string querySource = "result = base.Check_HSTS_Configuration();";
+            var queries = astclient.GetCxLevelQueries().Values;
+            var query = queries.FirstOrDefault(q => q.Lang == "CSharp" && q.Group == "General" && q.Name == "Check_Web_Application");
 
-            string language = "Apex";
-            string name = "Hardcoded_Password";
-            string querySource = "result = base.Hardcoded_Password();";
+            Assert.IsNotNull(query);
 
-            astclient.OverrideTenantQuerySource(language, name, querySource);
+            astclient.CreateTenantQuery(query.Lang, query.Name, query.Group, query.Severity, "base.Check_Web_Application();", query.IsExecutable);
+        }
+
+        [TestMethod]
+        public void UpdateQuerySeverityTest()
+        {
+            var queries = astclient.GetCxLevelQueries().Values;
+            var query = queries.FirstOrDefault(q => q.Lang == "CSharp" && q.Group == "General" && q.Name == "Check_HSTS_Validation");
+
+            Assert.IsNotNull(query);
+
+            astclient.SetTenantQuerySeverity(query.Lang, query.Name, ASTClient.QuerySeverity.Info);
         }
 
         [TestMethod]
