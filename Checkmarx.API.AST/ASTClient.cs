@@ -2981,6 +2981,20 @@ namespace Checkmarx.API.AST
         #region Queries
 
         /// <summary>
+        /// CxOne query metadata severity levels, as accepted by the Query Editor session API
+        /// (query creation and the Tenant-level metadata-severity update). Names match the values
+        /// confirmed to work against a live tenant (e.g. "High", "Critical").
+        /// </summary>
+        public enum QuerySeverity
+        {
+            Critical = 0,
+            High = 1,
+            Medium = 2,
+            Low = 3,
+            Info = 4
+        }
+
+        /// <summary>
         /// Result of a single query read/create/override attempt made as part of a batch.
         /// </summary>
         public class QueryBatchResult
@@ -3002,6 +3016,13 @@ namespace Checkmarx.API.AST
             public string Group { get; set; }
             public string Severity { get; set; }
             public bool? IsExecutable { get; set; }
+        }
+
+        public class TenantQuerySeverityUpdate
+        {
+            public string Language { get; set; }
+            public string QueryName { get; set; }
+            public QuerySeverity Severity { get; set; }
         }
 
         public class ProjectQueryUpsert
@@ -3260,13 +3281,21 @@ namespace Checkmarx.API.AST
         public void CreateTenantQuery(string language, string queryName, string group, string severity, string source, bool isExecutable) =>
             queryEditorClient.CreateTenantQuery(language, queryName, group, severity, source, isExecutable);
 
+        /// <summary>
+        /// Sets the severity of a query at the tenant level, leaving its source untouched — creating
+        /// the Tenant-level override first if the query is still only defined at the Cx level. See
+        /// <see cref="QueryEditorClient.SetTenantQuerySeverity"/>.
+        /// </summary>
+        public void SetTenantQuerySeverity(string language, string queryName, QuerySeverity severity) =>
+            queryEditorClient.SetTenantQuerySeverity(language, queryName, severity);
+
         #region Batched Query Editor Operations
 
         /// <summary>
         /// Reads the source of several Tenant-level queries, opening one session per distinct
         /// language instead of one session per query. See <see cref="QueryEditorClient.GetTenantQuerySources"/>.
         /// </summary>
-        public IEnumerable<QueryBatchResult> GetTenantQuerySources(IEnumerable<(string Language, string QueryName)> queries) =>
+        public IEnumerable<QueryBatchResult> GetTenantQuerySources(IEnumerable<(string Language, string QueryName, string Level)> queries) =>
             queryEditorClient.GetTenantQuerySources(queries);
 
         /// <summary>
@@ -3284,6 +3313,14 @@ namespace Checkmarx.API.AST
         /// </summary>
         public IEnumerable<QueryBatchResult> CreateOrOverrideTenantQuerySources(IEnumerable<TenantQueryUpsert> queries) =>
             queryEditorClient.CreateOrOverrideTenantQuerySources(queries);
+
+        /// <summary>
+        /// Sets the severity of several Tenant-level queries, opening one session per distinct
+        /// language instead of one session per query. See
+        /// <see cref="QueryEditorClient.SetTenantQuerySeverities"/>.
+        /// </summary>
+        public IEnumerable<QueryBatchResult> SetTenantQuerySeverities(IEnumerable<TenantQuerySeverityUpdate> queries) =>
+            queryEditorClient.SetTenantQuerySeverities(queries);
 
         /// <summary>
         /// Creates or overrides several Project-level queries for a single project/scan, opening

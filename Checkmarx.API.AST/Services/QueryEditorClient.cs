@@ -545,6 +545,79 @@ namespace Checkmarx.API.AST
             finally { endQueryEditorSession(session); }
         }
 
+        /// <summary>
+        /// Sets the severity of a query at the tenant level.
+        /// If the query is already overridden at the Tenant level, only its metadata is patched
+        /// (via <see cref="updateQuerySeverityByEditorQuery"/> — a real metadata-only PUT, so the
+        /// existing Tenant source is never resent). If it is still only defined at the Cx level, it
+        /// is promoted to a Tenant-level override with a pass-through source calling the Cx query
+        /// (<c>result = base.{queryName}();</c> — same convention as the SAST/Corp equivalent) and
+        /// its Group/Executable copied unchanged, with only the severity set to the requested value.
+        /// </summary>
+        /// <param name="language">Query language (case insensitive)</param>
+        /// <param name="queryName">Query Name (case insensitive)</param>
+        /// <param name="severity">The severity to set</param>
+        /// <exception cref="Exception"></exception>
+        public void SetTenantQuerySeverity(string language, string queryName, QuerySeverity severity)
+        {
+            if (string.IsNullOrWhiteSpace(language))
+                throw new ArgumentException(nameof(language));
+
+            if (string.IsNullOrWhiteSpace(queryName))
+                throw new ArgumentException(nameof(queryName));
+
+            var session = getQueryEditorSessionKey(Query_Level_Tenant, language);
+
+            try
+            {
+                var tree = QueryEditor.GetQueriesAsync(session, includeMetadata: true).Result;
+                setTenantQuerySeverityInSession(tree, session, language, queryName, severity);
+            }
+            finally { endQueryEditorSession(session); }
+        }
+
+        // Takes an already-fetched tree — SetTenantQuerySeverities below fetches it once per
+        // session and reuses it across every item in the same language, instead of once per query
+        // (which is what re-resolving via getQueryByLanguageAndName per item would do). See
+        // findQueryInTree. Shared by both the single-item SetTenantQuerySeverity above and the
+        // batched SetTenantQuerySeverities below, so the create-vs-patch decision only lives once.
+        private void setTenantQuerySeverityInSession(IEnumerable<QueriesTree> tree, Guid session, string language, string queryName, QuerySeverity severity)
+        {
+            string severityValue = severity.ToString();
+
+            var query = findQueryInTree(tree, session, language, queryName);
+
+            if (query == null)
+                throw new Exception($"No query found for language {language} with the name {queryName}");
+
+            if (query.Level == Query_Level_Tenant)
+            {
+                if (!string.Equals(query.Metadata?.Severity, severityValue, StringComparison.OrdinalIgnoreCase))
+                    updateQuerySeverityByEditorQuery(session, query.Id, severityValue);
+            }
+            else
+            {
+                // Found at Cx level, not yet overridden at Tenant level. Promote it to a real
+                // Tenant-level override with a pass-through source that just calls the Cx query
+                // unchanged — same "result = base.X();" convention used on the SAST/Corp side —
+                // rather than copying the Cx query's actual source. Same "create empty, then push
+                // source" two-step required for Tenant-level queries as OverrideTenantQuerySource
+                // above (see its comment).
+                CreateQueryRequest createBody = new CreateQueryRequest()
+                {
+                    Name = query.Name,
+                    Language = query.Metadata.Language,
+                    Group = query.Metadata.Group,
+                    Severity = severityValue,
+                    Executable = query.Metadata.Executable
+                };
+
+                var queryId = requestQueryCreation(session, createBody);
+
+                updateQuerySourceByEditorQuery(session, queryId, $"result = base.{query.Name}();");
+            }
+        }
+
         #region Batched Query Editor Operations
 
         // QueryBatchResult / TenantQueryUpsert / ProjectQueryUpsert stay defined on ASTClient itself
@@ -557,7 +630,7 @@ namespace Checkmarx.API.AST
         /// Reads the source of several Tenant-level queries, opening one session per distinct
         /// language instead of one session per query.
         /// </summary>
-        public IEnumerable<QueryBatchResult> GetTenantQuerySources(IEnumerable<(string Language, string QueryName)> queries)
+        public IEnumerable<QueryBatchResult> GetTenantQuerySources(IEnumerable<(string Language, string QueryName, string? Level)> queries)
         {
             var results = new List<QueryBatchResult>();
 
@@ -577,16 +650,16 @@ namespace Checkmarx.API.AST
                     }
                     catch (Exception ex)
                     {
-                        foreach (var (language, queryName) in languageGroup)
+                        foreach (var (language, queryName, level) in languageGroup)
                             results.Add(new QueryBatchResult { Language = language, QueryName = queryName, Success = false, ErrorMessage = ex.Message });
                         continue;
                     }
 
-                    foreach (var (language, queryName) in languageGroup)
+                    foreach (var (language, queryName, level) in languageGroup)
                     {
                         try
                         {
-                            var query = findQueryInTree(tree, session, language, queryName);
+                            var query = findQueryInTree(tree, session, language, queryName, level);
                             if (query == null)
                                 throw new Exception($"No query found for language {language} with the name {queryName}");
 
@@ -683,6 +756,54 @@ namespace Checkmarx.API.AST
                         try
                         {
                             upsertTenantQuerySourceInSession(tree, session, item);
+                            results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = true });
+                        }
+                        catch (Exception ex)
+                        {
+                            results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = false, ErrorMessage = ex.Message });
+                        }
+                    }
+                }
+                finally { endQueryEditorSession(session); }
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Sets the severity of several Tenant-level queries, opening one session per distinct
+        /// language instead of one session per query — the tenant has a hard cap on concurrent
+        /// query editor sessions (shared with UI users), so a mapping file spanning several
+        /// languages must not open one session per query. See <see cref="SetTenantQuerySeverity"/>
+        /// for the per-item create-vs-patch behavior this batches.
+        /// </summary>
+        public IEnumerable<QueryBatchResult> SetTenantQuerySeverities(IEnumerable<TenantQuerySeverityUpdate> queries)
+        {
+            var results = new List<QueryBatchResult>();
+
+            foreach (var languageGroup in queries.GroupBy(q => q.Language))
+            {
+                var session = getQueryEditorSessionKey(Query_Level_Tenant, languageGroup.Key);
+                try
+                {
+                    // Fetched once per session and reused per item — see findQueryInTree.
+                    ICollection<QueriesTree> tree;
+                    try
+                    {
+                        tree = QueryEditor.GetQueriesAsync(session, includeMetadata: true).Result;
+                    }
+                    catch (Exception ex)
+                    {
+                        foreach (var item in languageGroup)
+                            results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = false, ErrorMessage = ex.Message });
+                        continue;
+                    }
+
+                    foreach (var item in languageGroup)
+                    {
+                        try
+                        {
+                            setTenantQuerySeverityInSession(tree, session, item.Language, item.QueryName, item.Severity);
                             results.Add(new QueryBatchResult { Language = item.Language, QueryName = item.QueryName, Success = true });
                         }
                         catch (Exception ex)
@@ -1425,7 +1546,7 @@ namespace Checkmarx.API.AST
         // once a batch covers every Cx-level query in the tenant. The final per-query GetQueryAsync
         // call below still happens once per query regardless — the tree only lists queries, it doesn't
         // carry each one's source.
-        private QueryResponse findQueryInTree(IEnumerable<QueriesTree> tree, Guid session, string language, string queryName)
+        private QueryResponse findQueryInTree(IEnumerable<QueriesTree> tree, Guid session, string language, string queryName, string level = null)
         {
             var possibleQueriyToOverride = QueriesTree.FilterTreeByQueryName(tree, queryName)
                                                 .SingleOrDefault(x => x.Title.ToLower() == language.ToLower());
@@ -1435,16 +1556,39 @@ namespace Checkmarx.API.AST
 
             // Precedence: Project overrides Application overrides Tenant overrides the Cx default.
             QueriesTree selectedNode = null;
-            if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase));
-            else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase));
-            else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase));
-            else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase)))
-                selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase));
+            if (level != null)
+            {
+                switch (level)
+                {
+                    case Query_Level_Project:
+                        selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase));
+                        break;
+                    case Query_Level_Application:
+                        selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase));
+                        break;
+                    case Query_Level_Tenant:
+                        selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase));
+                        break;
+                    case Query_Level_Cx:
+                        selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase));
+                        break;
+                    default:
+                        throw new Exception($"Query {queryName} has an unknown Level ");
+                }
+            }
             else
-                throw new Exception($"Query {queryName} has an unknown Level ");
+            {
+                if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase)))
+                    selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Project, StringComparison.OrdinalIgnoreCase));
+                else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase)))
+                    selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Application, StringComparison.OrdinalIgnoreCase));
+                else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase)))
+                    selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Tenant, StringComparison.OrdinalIgnoreCase));
+                else if (possibleQueriyToOverride.Children.Any(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase)))
+                    selectedNode = possibleQueriyToOverride.Children.Single(x => string.Equals(x.Title, Query_Level_Cx, StringComparison.OrdinalIgnoreCase));
+                else
+                    throw new Exception($"Query {queryName} has an unknown Level ");
+            }
 
             // GetLastChildrenByTitle matches case-insensitively, which throws "Sequence contains more
             // than one element" for a real, observed Cx catalog quirk: pairs of queries whose names
@@ -1513,6 +1657,29 @@ namespace Checkmarx.API.AST
                 throw new Exception($"Unknown error updating query source with key {editorQueryId}");
 
             return id;
+        }
+
+        // Metadata-only counterpart to updateQuerySourceByEditorQuery above — same async-job
+        // create/poll shape, but hits PutQuerySeverityAsync (see QueryEditor.QueryMetadata.cs) so the
+        // query's source is never resent just to change its severity.
+        private void updateQuerySeverityByEditorQuery(Guid session, string editorQueryId, string severity)
+        {
+            var updateResult = QueryEditor.PutQuerySeverityAsync(session, editorQueryId, severity).Result;
+
+            bool completed = false;
+            while (!completed)
+            {
+                System.Threading.Thread.Sleep(TimeSpan.FromSeconds(5));
+
+                var status = QueryEditor.CheckRequestStatusAsync(session, updateResult.Id).Result;
+
+                if (status.Completed)
+                {
+                    completed = true;
+                    if (status.Status != RequestStatusStatus.Finished)
+                        throw new Exception($"Error updating severity for query with key {editorQueryId}. Message: \"{status.Value?.Message}\"");
+                }
+            }
         }
 
         private string requestQueryCreation(Guid session, CreateQueryRequest createBody)
