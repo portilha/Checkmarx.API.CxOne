@@ -59,6 +59,7 @@ namespace Checkmarx.API.AST.Models
         public string Type => _scan.Metadata?.Type;
         public string RepoUrl => _scan.Metadata?.Handler?.GitHandler?.RepoUrl;
         public string UploadUrl => _scan.Metadata?.Handler?.UploadHandler?.UploadUrl;
+        public List<string> Engines => _scan.Engines.ToList();
 
         private readonly object _loadLock = new object();
         private readonly object _scanConfigurationsLock = new object();
@@ -67,6 +68,8 @@ namespace Checkmarx.API.AST.Models
         private readonly object _resultsSummaryLock = new object();
         private readonly object _sastResultsLock = new object();
         private readonly object _sastVulnerabilitiesLock = new object();
+        private readonly object _kicsVulnerabilitiesLock = new object();
+        private readonly object _sscsVulnerabilitiesLock = new object();
         private readonly object _scaResultsLock = new object();
         private readonly object _scaVulnerabilitiesLock = new object();
         private readonly object _scaRisksLock = new object();
@@ -280,6 +283,36 @@ namespace Checkmarx.API.AST.Models
                         _sastVulnerabilities = _client.GetSASTScanResultsById(Id, limit: 5000).ToList();
                 }
                 return _sastVulnerabilities;
+            }
+        }
+
+        public List<KicsResult> _kicsVulnerabilities;
+        public List<KicsResult> KicsVulnerabilities
+        {
+            get
+            {
+                if (_kicsVulnerabilities != null) return _kicsVulnerabilities;
+                lock (_kicsVulnerabilitiesLock)
+                {
+                    if (_kicsVulnerabilities == null)
+                        _kicsVulnerabilities = _client.GetKicsScanResultsById(Id).ToList();
+                }
+                return _kicsVulnerabilities;
+            }
+        }
+
+        public Dictionary<SSCSGroup, IEnumerable<EngineResults>> _sscsVulnerabilities;
+        public Dictionary<SSCSGroup, IEnumerable<EngineResults>> SSCSVulnerabilities
+        {
+            get
+            {
+                if (_sscsVulnerabilities != null) return _sscsVulnerabilities;
+                lock (_sscsVulnerabilitiesLock)
+                {
+                    if (_sscsVulnerabilities == null)
+                        _sscsVulnerabilities = _client.GetSSCSResults(ProjectId, Id);
+                }
+                return _sscsVulnerabilities;
             }
         }
 

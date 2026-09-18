@@ -490,8 +490,24 @@ namespace Checkmarx.API.AST
             }
         }
 
+        private SSCS _sscs;
+        public SSCS SSCS
+        {
+            get
+            {
+                if (Connected && _sscs == null)
+                    _sscs = new SSCS(ASTServer, _httpClient);
+
+                return _sscs;
+            }
+        }
+
         private SSCSReader _sscsReader;
-        public SSCSReader SSCS
+
+        /// <summary>
+        /// SSCS API - Reader ("/read/..." routes; richer per-result state/status/similarityId than SSCS)
+        /// </summary>
+        public SSCSReader SSCSReader
         {
             get
             {
@@ -2568,6 +2584,58 @@ namespace Checkmarx.API.AST
             SASTResultsPredicates.RecalculateSummaryCountersAsync(new RecalculateBody { ProjectId = projectId, ScanId = scanId })
                 .GetAwaiter()
                 .GetResult();
+        }
+
+        #endregion
+
+        #region SSCS
+
+        // Raw values of the SSCS Engine enum (see Services/SSCS.cs), not display names.
+        private static readonly string[] SSCSEngines = new[] { "2ms", "Scorecard" };
+
+        // "/results/{project}/{scan}/{engine}" rejects requests without a ruleId filter
+        // ("missing ruleID in filters") - there is no "give me everything" call.
+        private static string BuildSSCSRuleIdFilter(string ruleId)
+        {
+            var filter = new JObject
+            {
+                ["ruleId"] = new JObject
+                {
+                    ["values"] = new JArray(ruleId),
+                    ["operator"] = "eq"
+                }
+            };
+            return filter.ToString(Formatting.None);
+        }
+
+        /// <summary>
+        /// Fetches all SSCS (2ms/Scorecard micro-engine) results for a scan, grouped by rule.
+        /// Mirrors the CxOne UI/team script flow: discover the rule breakdown per engine via
+        /// the "groups/ruleId" endpoint, then pull the entries for each rule.
+        /// </summary>
+        public Dictionary<SSCSGroup, IEnumerable<EngineResults>> GetSSCSResults(Guid projectId, Guid scanId)
+        {
+            var results = new Dictionary<SSCSGroup, IEnumerable<EngineResults>>();
+
+            foreach (var engine in SSCSEngines)
+            {
+                var groups = SSCS.GetGroupsByProjectScanAsync(
+                    projectId.ToString(), scanId.ToString(), engine, "ruleId", "", null)
+                    .GetAwaiter().GetResult();
+
+                foreach (var group in groups.Entries)
+                {
+                    var filters = BuildSSCSRuleIdFilter(group.ColumnValue);
+
+                    var engineResults = SSCS.GetEngineResultsByProjectAsync(
+                        projectId, scanId, engine, filters, pageSize: group.Count)
+                        .GetAwaiter().GetResult();
+
+                    results[group] = new[] { engineResults };
+                }
+            }
+
+            return results;
         }
 
         #endregion
