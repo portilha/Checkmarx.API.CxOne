@@ -3122,11 +3122,23 @@ namespace Checkmarx.API.AST
             if (_mandatoryCommentWhenChangingStateCache.HasValue && DateTime.UtcNow < _mandatoryCommentWhenChangingStateCacheExpiry)
                 return _mandatoryCommentWhenChangingStateCache.Value;
 
-            var configs = GetTenantConfigurations();
+            bool result;
 
-            bool result = configs.TryGetValue(SettingsMandatoryCommentWhenChangingState, out var config) &&
-                !string.IsNullOrEmpty(config?.Value) &&
-                bool.TryParse(config.Value, out var parsed) && parsed;
+            try
+            {
+                var configs = GetTenantConfigurations();
+
+                result = configs != null &&
+                    configs.TryGetValue(SettingsMandatoryCommentWhenChangingState, out var config) &&
+                    !string.IsNullOrEmpty(config?.Value) &&
+                    bool.TryParse(config.Value, out var parsed) && parsed;
+            }
+            catch (Exception)
+            {
+                // The credentials may not be allowed to read the tenant configuration. Assume the setting is on:
+                // the only cost is a placeholder comment on empty ones, whereas guessing "off" risks a rejected batch.
+                result = true;
+            }
 
             _mandatoryCommentWhenChangingStateCache = result;
             _mandatoryCommentWhenChangingStateCacheExpiry = DateTime.UtcNow + MandatoryCommentCacheDuration;
