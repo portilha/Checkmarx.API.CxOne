@@ -2263,7 +2263,7 @@ namespace Checkmarx.API.AST
         #region Results
 
         public bool MarkSASTResult(Guid projectId, SASTResult result, IEnumerable<PredicateWithCommentJSON> history, bool updateSeverity = true,
-            bool updateState = true, bool updateComment = true, Guid? scanId = null)
+            bool updateState = true, bool updateComment = true, Guid? scanId = null, string defaultComment = null)
         {
             if (projectId == Guid.Empty)
                 throw new ArgumentException(nameof(projectId));
@@ -2275,36 +2275,32 @@ namespace Checkmarx.API.AST
                 throw new ArgumentNullException(nameof(result));
 
             List<PredicateBySimiliartyIdBody> body = [];
+            bool mandatoryComment = IsMandatoryCommentWhenChangingState();
+            string previousState = result.State;
 
             foreach (var predicate in history)
             {
+                string outgoingStateName = updateState ? predicate.State : result.State;
+                bool isStateChange = !string.Equals(outgoingStateName, previousState, StringComparison.OrdinalIgnoreCase);
+                string candidateComment = updateComment ? predicate.Comment : null;
+
                 PredicateBySimiliartyIdBody newBody = new PredicateBySimiliartyIdBody
                 {
                     SimilarityId = predicate.SimilarityId.ToString(),
                     ProjectId = projectId,
                     ScanId = scanId,
                     Severity = updateSeverity ? predicate.Severity : result.Severity,
-                    Comment = updateComment ? predicate.Comment : null
+                    Comment = ResolveCommentForStateChange(candidateComment, isStateChange, mandatoryComment, defaultComment)
                 };
 
-                if (updateState)
-                {
-                    var predicateState = SASTStates.SingleOrDefault(x => x.Name.Equals(predicate.State, StringComparison.InvariantCultureIgnoreCase));
-                    if (predicateState?.State.HasValue == true)
-                        newBody.State = predicateState.State.Value.ToString();
-                    else if (predicateState != null)
-                        newBody.CustomStateId = predicateState.Id;
-                }
-                else
-                {
-                    var sastState = SASTStates.SingleOrDefault(x => x.Name.Equals(result.State, StringComparison.InvariantCultureIgnoreCase));
-                    if (sastState.State.HasValue)
-                        newBody.State = sastState.State.Value.ToString();
-                    else
-                        newBody.CustomStateId = sastState.Id;
-                }
+                var resolvedState = SASTStates.SingleOrDefault(x => x.Name.Equals(outgoingStateName, StringComparison.InvariantCultureIgnoreCase));
+                if (resolvedState?.State.HasValue == true)
+                    newBody.State = resolvedState.State.Value.ToString();
+                else if (resolvedState != null)
+                    newBody.CustomStateId = resolvedState.Id;
 
                 body.Add(newBody);
+                previousState = outgoingStateName;
             }
 
             if (body.Any())
@@ -2335,8 +2331,14 @@ namespace Checkmarx.API.AST
             else
                 newBody.CustomStateId = sastState.Id;
 
-            if (!string.IsNullOrWhiteSpace(comment))
-                newBody.Comment = comment;
+            // This overload always sets the target state explicitly, so it is always treated as a
+            // state change for comment purposes — there is no "current state" parameter here to
+            // compare against. A single explicit comment is the only one the caller can supply, so
+            // there's no separate "default comment" concept here (unlike the history-replay overloads,
+            // where defaultComment is a caller-wide fallback distinct from each predicate's own comment).
+            string resolvedComment = ResolveCommentForStateChange(comment, isStateChange: true, IsMandatoryCommentWhenChangingState(), defaultComment: null);
+            if (!string.IsNullOrWhiteSpace(resolvedComment))
+                newBody.Comment = resolvedComment;
 
             SASTResultsPredicates.PredicateBySimiliartyIdAndProjectIdAsync(new PredicateBySimiliartyIdBody[] { newBody }).Wait();
         }
@@ -2366,14 +2368,20 @@ namespace Checkmarx.API.AST
             else
                 newBody.CustomStateId = sastState.Id;
 
-            if (!string.IsNullOrWhiteSpace(comment))
-                newBody.Comment = comment;
+            // This overload always sets the target state explicitly, so it is always treated as a
+            // state change for comment purposes — there is no "current state" parameter here to
+            // compare against. A single explicit comment is the only one the caller can supply, so
+            // there's no separate "default comment" concept here (unlike the history-replay overloads,
+            // where defaultComment is a caller-wide fallback distinct from each predicate's own comment).
+            string resolvedComment = ResolveCommentForStateChange(comment, isStateChange: true, IsMandatoryCommentWhenChangingState(), defaultComment: null);
+            if (!string.IsNullOrWhiteSpace(resolvedComment))
+                newBody.Comment = resolvedComment;
 
             SASTResultsPredicates.PredicateByAttackVectorIdAsync(new PredicateByAttackVectorIdBody[] { newBody }).Wait();
         }
 
         public bool MarkSASTResultByAttackVector(Guid projectId, SASTResult result, PredicateHistoryWithAttackVector history, bool updateSeverity = true,
-            bool updateState = true, bool updateComment = true, Guid? scanId = null)
+            bool updateState = true, bool updateComment = true, Guid? scanId = null, string defaultComment = null)
         {
             if (projectId == Guid.Empty)
                 throw new ArgumentException(nameof(projectId));
@@ -2391,37 +2399,33 @@ namespace Checkmarx.API.AST
                 return false;
 
             List<PredicateByAttackVectorIdBody> body = [];
+            bool mandatoryComment = IsMandatoryCommentWhenChangingState();
+            string previousState = result.State;
 
             foreach (var predicate in history.Predicates)
             {
+                string outgoingStateName = updateState ? predicate.State : result.State;
+                bool isStateChange = !string.Equals(outgoingStateName, previousState, StringComparison.OrdinalIgnoreCase);
+                string candidateComment = updateComment ? predicate.Comment : null;
+
                 PredicateByAttackVectorIdBody newBody = new PredicateByAttackVectorIdBody
                 {
                     AttackVectorId = history.AttackVectorId,
                     ProjectId = projectId,
                     ScanId = scanId,
                     Severity = updateSeverity ? predicate.Severity : result.Severity,
-                    Comment = updateComment ? predicate.Comment : null,
+                    Comment = ResolveCommentForStateChange(candidateComment, isStateChange, mandatoryComment, defaultComment),
                     FilterBySimilarityId = predicate.SimilarityId
                 };
 
-                if (updateState)
-                {
-                    var predicateState = SASTStates.SingleOrDefault(x => x.Name.Equals(predicate.State, StringComparison.InvariantCultureIgnoreCase));
-                    if (predicateState?.State.HasValue == true)
-                        newBody.State = predicateState.State.Value.ToString();
-                    else if (predicateState != null)
-                        newBody.CustomStateId = predicateState.Id;
-                }
-                else
-                {
-                    var sastState = SASTStates.SingleOrDefault(x => x.Name.Equals(result.State, StringComparison.InvariantCultureIgnoreCase));
-                    if (sastState.State.HasValue)
-                        newBody.State = sastState.State.Value.ToString();
-                    else
-                        newBody.CustomStateId = sastState.Id;
-                }
+                var resolvedState = SASTStates.SingleOrDefault(x => x.Name.Equals(outgoingStateName, StringComparison.InvariantCultureIgnoreCase));
+                if (resolvedState?.State.HasValue == true)
+                    newBody.State = resolvedState.State.Value.ToString();
+                else if (resolvedState != null)
+                    newBody.CustomStateId = resolvedState.Id;
 
                 body.Add(newBody);
+                previousState = outgoingStateName;
             }
 
             if (body.Any())
@@ -2431,6 +2435,23 @@ namespace Checkmarx.API.AST
             }
 
             return false;
+        }
+
+        private const string DefaultMandatoryStateChangeComment = "State change (no comment supplied).";
+
+        /// <summary>
+        /// Decides the outgoing comment for a predicate entry that may change a result's state.
+        /// CxOne rejects the whole batch with 400 "Invalid request supplied" when a tenant requires a
+        /// comment on state change (<see cref="IsMandatoryCommentWhenChangingState"/>) and an entry that
+        /// changes state carries an empty comment — this backfills a placeholder so that can never happen,
+        /// regardless of whether the caller asked to propagate the original comment (<c>updateComment</c>).
+        /// </summary>
+        private static string ResolveCommentForStateChange(string candidateComment, bool isStateChange, bool mandatoryCommentWhenChangingState, string defaultComment)
+        {
+            if (!isStateChange || !string.IsNullOrWhiteSpace(candidateComment) || !mandatoryCommentWhenChangingState)
+                return candidateComment;
+
+            return string.IsNullOrWhiteSpace(defaultComment) ? DefaultMandatoryStateChangeComment : defaultComment;
         }
 
         /// <summary>
@@ -3088,17 +3109,40 @@ namespace Checkmarx.API.AST
             Configuration.UpdateTenantConfigurationAsync(body).Wait();
         }
 
+        private bool? _mandatoryCommentWhenChangingStateCache;
+        private DateTime _mandatoryCommentWhenChangingStateCacheExpiry = DateTime.MinValue;
+        private static readonly TimeSpan MandatoryCommentCacheDuration = TimeSpan.FromMinutes(5);
+
+        /// <summary>
+        /// Cached for a few minutes — callers that mark many results in a batch (e.g. ResultPropagation)
+        /// would otherwise issue one GET /tenant request per result just to read this one setting.
+        /// </summary>
         public bool IsMandatoryCommentWhenChangingState()
         {
-            var configs = GetTenantConfigurations();
+            if (_mandatoryCommentWhenChangingStateCache.HasValue && DateTime.UtcNow < _mandatoryCommentWhenChangingStateCacheExpiry)
+                return _mandatoryCommentWhenChangingStateCache.Value;
 
-            if (!configs.TryGetValue(SettingsMandatoryCommentWhenChangingState, out var config) ||
-                string.IsNullOrEmpty(config?.Value))
+            bool result;
+
+            try
             {
-                return false;
+                var configs = GetTenantConfigurations();
+
+                result = configs != null &&
+                    configs.TryGetValue(SettingsMandatoryCommentWhenChangingState, out var config) &&
+                    !string.IsNullOrEmpty(config?.Value) &&
+                    bool.TryParse(config.Value, out var parsed) && parsed;
+            }
+            catch (Exception)
+            {
+                // The credentials may not be allowed to read the tenant configuration. Assume the setting is on:
+                // the only cost is a placeholder comment on empty ones, whereas guessing "off" risks a rejected batch.
+                result = true;
             }
 
-            return bool.TryParse(config.Value, out var result) && result;
+            _mandatoryCommentWhenChangingStateCache = result;
+            _mandatoryCommentWhenChangingStateCacheExpiry = DateTime.UtcNow + MandatoryCommentCacheDuration;
+            return result;
         }
 
         public string GetProjectRepoUrl(Guid projectId) => GetProjectConfig(projectId, SettingsProjectRepoUrl);
