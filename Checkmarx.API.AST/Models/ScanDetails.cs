@@ -131,7 +131,7 @@ namespace Checkmarx.API.AST.Models
 
                 try
                 {
-                    var sast = _scan.StatusDetails?.SingleOrDefault(x => x.Name == ASTClient.SAST_Engine);
+                    var sast = _scan.StatusDetails?.FirstOrDefault(x => x.Name == ASTClient.SAST_Engine);
                     if (sast != null)
                         loC = sast.Loc;
 
@@ -253,7 +253,7 @@ namespace Checkmarx.API.AST.Models
 
                     if (!Successful) return null;
 
-                    var sastStatusDetails = _scan.StatusDetails?.SingleOrDefault(x => x.Name == ASTClient.SAST_Engine);
+                    var sastStatusDetails = _scan.StatusDetails?.FirstOrDefault(x => x.Name == ASTClient.SAST_Engine);
                     if (sastStatusDetails == null) return null;
 
                     var result = new SASTScanResultDetails
@@ -356,7 +356,7 @@ namespace Checkmarx.API.AST.Models
 
                     if (!Successful) return null;
 
-                    var scaStatusDetails = _scan.StatusDetails.SingleOrDefault(x => x.Name == ASTClient.SCA_Engine);
+                    var scaStatusDetails = _scan.StatusDetails.FirstOrDefault(x => x.Name == ASTClient.SCA_Engine);
                     if (scaStatusDetails == null) return null;
 
                     var result = new ScanResultDetails
@@ -433,7 +433,7 @@ namespace Checkmarx.API.AST.Models
 
                     if (!Successful) return null;
 
-                    var kicsStatusDetails = _scan.StatusDetails.SingleOrDefault(x => x.Name == ASTClient.KICS_Engine);
+                    var kicsStatusDetails = _scan.StatusDetails.FirstOrDefault(x => x.Name == ASTClient.KICS_Engine);
                     if (kicsStatusDetails == null) return null;
 
                     var result = new ScanResultDetails
@@ -638,7 +638,7 @@ namespace Checkmarx.API.AST.Models
             if (!_scan.Engines.Contains(scanType.ToString()))
                 throw new ArgumentException($"{scanType} did not ran in this Scan");
 
-            Checkmarx.API.AST.Services.Scans.StatusDetails status = _scan.StatusDetails.SingleOrDefault(x => x.Name == scanType.ToString());
+            Checkmarx.API.AST.Services.Scans.StatusDetails status = _scan.StatusDetails.FirstOrDefault(x => x.Name == scanType.ToString());
 
             TimeSpan value = TimeSpan.Zero;
             if (status != null)
@@ -647,7 +647,7 @@ namespace Checkmarx.API.AST.Models
             if (value == TimeSpan.Zero)
                 _scan = _client.Scans.GetScanAsync(Id).Result;
 
-            status = _scan.StatusDetails.SingleOrDefault(x => x.Name == scanType.ToString());
+            status = _scan.StatusDetails.FirstOrDefault(x => x.Name == scanType.ToString());
 
             if (status != null)
                 return status.Duration;

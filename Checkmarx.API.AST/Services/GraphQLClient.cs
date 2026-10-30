@@ -336,7 +336,7 @@ namespace Checkmarx.API.AST.Services
                 ) {
                     totalCount,
                     items {
-                        credit, state, isIgnored, cve, cwe, description, packageId, severity, type, published, score, violatedPolicies, isExploitable, exploitabilityReason, exploitabilityStatus, isKevDataExists, isExploitDbDataExists, vulnerabilityFixResolutionText, relation, epssData { cve, date, epss, percentile }, isEpssDataExists, detectionDate, isVulnerabilityNew, cweInfo { title }, packageInfo { name, packageRepository, version }, exploitablePath { methodMatch { fullName, line, namespace, shortName, sourceFile }, methodSourceCall { fullName, line, namespace, shortName, sourceFile } }, vulnerablePackagePath { id, isDevelopment, isResolved, name, version, vulnerabilityRiskLevel }, references { comment, type, url }, cvss2 { attackComplexity, attackVector, authentication, availability, availabilityRequirement, baseScore, collateralDamagePotential, confidentiality, confidentialityRequirement, exploitCodeMaturity, integrityImpact, integrityRequirement, remediationLevel, reportConfidence, targetDistribution }, cvss3 { attackComplexity, attackVector, availability, availabilityRequirement, baseScore, confidentiality, confidentialityRequirement, exploitCodeMaturity, integrity, integrityRequirement, privilegesRequired, remediationLevel, reportConfidence, scope, userInteraction }, cvss4 { attackComplexity, attackVector, attackRequirements, baseScore, privilegesRequired, userInteraction, vulnerableSystemConfidentiality, vulnerableSystemIntegrity, vulnerableSystemAvailability, subsequentSystemConfidentiality, subsequentSystemIntegrity, subsequentSystemAvailability }, pendingState, pendingChanges, packageState { type, value }, pendingScore, pendingSeverity, isScoreOverridden
+                        credit, state, isIgnored, cve, cwe, description, packageId, severity, type, published, score, violatedPolicies, isExploitable, exploitabilityReason, exploitabilityStatus, isKevDataExists, isExploitDbDataExists, relation, epssData { cve, date, epss, percentile }, isEpssDataExists, detectionDate, isVulnerabilityNew, cweInfo { title }, packageInfo { name, packageRepository, version }, exploitablePath { methodMatch { fullName, line, namespace, shortName, sourceFile }, methodSourceCall { fullName, line, namespace, shortName, sourceFile } }, vulnerablePackagePath { id, isDevelopment, isResolved, name, version, vulnerabilityRiskLevel }, references { comment, type, url }, cvss2 { attackComplexity, attackVector, authentication, availability, availabilityRequirement, baseScore, collateralDamagePotential, confidentiality, confidentialityRequirement, exploitCodeMaturity, integrityImpact, integrityRequirement, remediationLevel, reportConfidence, targetDistribution }, cvss3 { attackComplexity, attackVector, availability, availabilityRequirement, baseScore, confidentiality, confidentialityRequirement, exploitCodeMaturity, integrity, integrityRequirement, privilegesRequired, remediationLevel, reportConfidence, scope, userInteraction }, cvss4 { attackComplexity, attackVector, attackRequirements, baseScore, privilegesRequired, userInteraction, vulnerableSystemConfidentiality, vulnerableSystemIntegrity, vulnerableSystemAvailability, subsequentSystemConfidentiality, subsequentSystemIntegrity, subsequentSystemAvailability }, pendingState, pendingChanges, packageState { type, value }, pendingScore, pendingSeverity, isScoreOverridden
                     }
                 }
             }";
@@ -373,6 +373,13 @@ namespace Checkmarx.API.AST.Services
                 try
                 {
                     var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(BaseUrl, content)).ConfigureAwait(false);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // The body carries the GraphQL validation error (e.g. the unknown field name)
+                        string errorBody = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"GraphQL SCA risks request failed for scan {currentVariables.ScanId} (skip {skip}): {(int)response.StatusCode} {response.StatusCode} - {errorBody}");
+                    }
 
                     response.EnsureSuccessStatusCode();
 

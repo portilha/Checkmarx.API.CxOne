@@ -1879,7 +1879,7 @@ namespace Checkmarx.API.AST
                     if (!string.IsNullOrEmpty(engine))
                     {
                         if (scan.Engines != null && scan.Engines.Any(x => x == engine &&
-                            (scan.Status == Status.Completed || scan.StatusDetails?.SingleOrDefault(x => x.Name == engine)?.Status == CompletedStage)))
+                            (scan.Status == Status.Completed || scan.StatusDetails?.FirstOrDefault(x => x.Name == engine)?.Status == CompletedStage)))
                         {
                             list.Add(scan);
                         }
