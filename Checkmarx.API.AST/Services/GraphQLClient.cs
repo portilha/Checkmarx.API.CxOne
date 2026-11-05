@@ -1,5 +1,6 @@
 ﻿using Checkmarx.API.AST.Errors;
 using Checkmarx.API.AST.Exceptions;
+using Checkmarx.API.AST.Models.Containers;
 using Checkmarx.API.AST.Models.SCA;
 using Newtonsoft.Json;
 using System;
@@ -24,23 +25,32 @@ namespace Checkmarx.API.AST.Services
         //private readonly GraphQLHttpClient _client;
 
 #pragma warning disable 8618
-        private string _baseUrl;
+        private string _scaBaseUrl;
 #pragma warning restore 8618
 
         private static System.Lazy<Newtonsoft.Json.JsonSerializerSettings> _settings = new System.Lazy<Newtonsoft.Json.JsonSerializerSettings>(CreateSerializerSettings, true);
 
         private readonly HttpClient _httpClient;
 
-        public GraphQLClient(string endpointUri, HttpClient httpClient)
+        /// <param name="httpClient">Authenticated client shared with the rest of the API.</param>
+        /// <param name="scaEndpointUri">SCA GraphQL endpoint.</param>
+        /// <param name="containersEndpointUri">Container Security GraphQL endpoint.</param>
+        public GraphQLClient(HttpClient httpClient, string scaEndpointUri, string containersEndpointUri)
         {
-            if (string.IsNullOrWhiteSpace(endpointUri))
-                throw new ArgumentException("Endpoint URI cannot be null or empty", nameof(endpointUri));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-            BaseUrl = endpointUri;
+
+            if (string.IsNullOrWhiteSpace(scaEndpointUri))
+                throw new ArgumentException("SCA endpoint URI cannot be null or empty", nameof(scaEndpointUri));
+
+            if (string.IsNullOrWhiteSpace(containersEndpointUri))
+                throw new ArgumentException("Containers endpoint URI cannot be null or empty", nameof(containersEndpointUri));
+
+            SCABaseUrl = scaEndpointUri;
+            ContainersBaseUrl = containersEndpointUri;
 
             //var options = new GraphQLHttpClientOptions
             //{
-            //    EndPoint = new Uri(BaseUrl)
+            //    EndPoint = new Uri(SCABaseUrl)
             //};
 
             //_client = new GraphQLHttpClient(options, new NewtonsoftJsonSerializer());
@@ -58,14 +68,14 @@ namespace Checkmarx.API.AST.Services
             return settings;
         }
 
-        public string BaseUrl
+        public string SCABaseUrl
         {
-            get { return _baseUrl; }
+            get { return _scaBaseUrl; }
             set
             {
-                _baseUrl = value;
-                if (!string.IsNullOrEmpty(_baseUrl) && !_baseUrl.EndsWith("/"))
-                    _baseUrl += '/';
+                _scaBaseUrl = value;
+                if (!string.IsNullOrEmpty(_scaBaseUrl) && !_scaBaseUrl.EndsWith("/"))
+                    _scaBaseUrl += '/';
             }
         }
 
@@ -76,6 +86,10 @@ namespace Checkmarx.API.AST.Services
         partial void PrepareRequest(System.Net.Http.HttpClient client, System.Net.Http.HttpRequestMessage request, string url);
         partial void PrepareRequest(System.Net.Http.HttpClient client, System.Net.Http.HttpRequestMessage request, System.Text.StringBuilder urlBuilder);
         partial void ProcessResponse(System.Net.Http.HttpClient client, System.Net.Http.HttpResponseMessage response);
+
+        #region SCA
+
+        // Everything in this region talks to the SCA GraphQL endpoint (SCABaseUrl).
 
         public async Task<string> ExecuteQueryAsync(string query, object variables = null)
         {
@@ -94,7 +108,7 @@ namespace Checkmarx.API.AST.Services
                 "application/json"
             );
 
-            var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(BaseUrl, jsonContent)).ConfigureAwait(false);
+            var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(SCABaseUrl, jsonContent)).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync();
@@ -187,7 +201,7 @@ namespace Checkmarx.API.AST.Services
                         });
 
                     var response = await _retryPolicy
-                        .ExecuteAsync(() => _httpClient.PostAsync(BaseUrl, content))
+                        .ExecuteAsync(() => _httpClient.PostAsync(SCABaseUrl, content))
                         .ConfigureAwait(false);
 
                     response.EnsureSuccessStatusCode();
@@ -275,7 +289,7 @@ namespace Checkmarx.API.AST.Services
             try
             {
                 // Send the POST request
-                response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(BaseUrl, content)).ConfigureAwait(false);
+                response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(SCABaseUrl, content)).ConfigureAwait(false);
 
                 // Ensure the request was successful; throws HttpRequestException for non-success status codes
                 response.EnsureSuccessStatusCode();
@@ -372,7 +386,7 @@ namespace Checkmarx.API.AST.Services
 
                 try
                 {
-                    var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(BaseUrl, content)).ConfigureAwait(false);
+                    var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(SCABaseUrl, content)).ConfigureAwait(false);
 
                     if (!response.IsSuccessStatusCode)
                     {
@@ -464,7 +478,7 @@ namespace Checkmarx.API.AST.Services
                 {
                     var content = JsonContent.Create(requestBody, options: new JsonSerializerOptions { });
 
-                    var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(BaseUrl, content)).ConfigureAwait(false);
+                    var response = await _retryPolicy.ExecuteAsync(() => _httpClient.PostAsync(SCABaseUrl, content)).ConfigureAwait(false);
 
                     response.EnsureSuccessStatusCode();
 
@@ -495,7 +509,7 @@ namespace Checkmarx.API.AST.Services
                 throw new ArgumentException("Library name cannot be null or empty", nameof(packageName));
 
             var urlBuilder_ = new System.Text.StringBuilder();
-            urlBuilder_.Append(BaseUrl != null ? BaseUrl.TrimEnd('/') : "");
+            urlBuilder_.Append(SCABaseUrl != null ? SCABaseUrl.TrimEnd('/') : "");
 
             StringBuilder whereClause = new StringBuilder();
 
@@ -583,6 +597,169 @@ namespace Checkmarx.API.AST.Services
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
             );
         }
+
+        #endregion
+
+        #region Containers
+
+        // Container Security has its own GraphQL endpoint, the one the Checkmarx One results page uses
+        // (/api/containers/buffet/graphql). It is an internal API of the UI, not a documented one, so it can change
+        // without notice. The flow mirrors the team's Containers_datafetch.py:
+        //   images of a scan  ->  per image: remediation + layers  ->  per image: vulnerable packages and their CVEs
+
+        /// <summary>Container Security GraphQL endpoint.</summary>
+        public string ContainersBaseUrl { get; }
+
+        private const int ContainersDefaultPageSize = 100;
+
+        private const string ContainersImagesQuery = @"query ($s: UUID!, $skip: Int, $take: Int) { images(scanId: $s, skip: $skip, take: $take) {
+          totalCount items { imageId imageName imageHash baseImage severity pkgCount vulnerablePkgCount size runtime fixable
+          maliciousPackagesCount isImageMalicious status snoozeDate scanError groupsData { filePath }
+          vulnerabilities { criticalCount highCount mediumCount lowCount noneCount } } } }";
+
+        private const string ContainersImageDetailQuery = @"query ($s: UUID!, $i: String!) {
+          imageRemediations(scanId: $s, imageId: $i) { isOutdated distribution vulnerabilitiesCount
+            minorRecommendedImages { imageId vulnerabilitiesCount criticalVulnerabilitiesCount highVulnerabilitiesCount }
+            majorRecommendedImages { imageId vulnerabilitiesCount criticalVulnerabilitiesCount highVulnerabilitiesCount } }
+          imageLayers(scanId: $s, imageId: $i) { fixable fixableImage fromImages { imageName layers { layerId } } } }";
+
+        private const string ContainersImageVulnerabilitiesQuery = @"query ($s: UUID!, $i: String!, $skip: Int, $take: Int) {
+          imagesVulnerabilities(scanId: $s, imageId: $i, skip: $skip, take: $take) { totalCount items {
+            packageId packageName packageVersion type distribution maxRiskSeverity risksCount status snoozeDate
+            isStatusGlobal imageTriageRegexes imageTriageRegexStatus runtimeUsage isSource isMalicious layerIds
+            aggregatedRisks { critical high medium low none risksList { cve cwe vulnerabilityLevel vulnerabilityScore
+              originalSeverityLevel originalScore originalAdvisorySeverity advisoryBaseScore advisoryName cvssVersion state
+              customStateId isExploitable fixable fixedVersion publicationDate
+              statusInfo { status firstScanId firstFoundDate } } } } } }";
+
+        /// <summary>
+        /// Every image of a Containers scan, with its severity counters, base image, triage status and scan error.
+        /// </summary>
+        /// <param name="scanId">A scan that ran the Containers engine.</param>
+        /// <param name="pageSize">Images requested per call.</param>
+        public Task<List<ContainersImage>> GetContainersImagesAsync(Guid scanId, int pageSize = ContainersDefaultPageSize)
+        {
+            return GetContainersPagedAsync<ContainersImagesData, ContainersImage>(
+                ContainersImagesQuery, scanId, null, pageSize, data => data.Images);
+        }
+
+        /// <summary>
+        /// Remediation advice (is the base image outdated, best minor and major upgrade) and layers (which layer comes
+        /// from which base image) of one image of a scan.
+        /// </summary>
+        /// <param name="scanId">A scan that ran the Containers engine.</param>
+        /// <param name="imageId">The <see cref="ContainersImage.ImageId"/> of the image.</param>
+        public async Task<ContainersImageDetail> GetContainersImageDetailAsync(Guid scanId, string imageId)
+        {
+            ValidateContainersScanAndImage(scanId, imageId);
+
+            var data = await ExecuteContainersQueryAsync<ContainersImageDetailData>(
+                ContainersImageDetailQuery,
+                new Dictionary<string, object> { ["s"] = scanId, ["i"] = imageId }).ConfigureAwait(false);
+
+            return new ContainersImageDetail
+            {
+                Remediation = data.ImageRemediations,
+                Layers = data.ImageLayers
+            };
+        }
+
+        /// <summary>
+        /// Every vulnerable package of one image of a scan, with its triage status, runtime usage, layers and CVEs.
+        /// </summary>
+        /// <param name="scanId">A scan that ran the Containers engine.</param>
+        /// <param name="imageId">The <see cref="ContainersImage.ImageId"/> of the image.</param>
+        /// <param name="pageSize">Packages requested per call.</param>
+        public async Task<List<ContainersPackage>> GetContainersImageVulnerabilitiesAsync(Guid scanId, string imageId, int pageSize = ContainersDefaultPageSize)
+        {
+            ValidateContainersScanAndImage(scanId, imageId);
+
+            return await GetContainersPagedAsync<ContainersVulnerabilitiesData, ContainersPackage>(
+                ContainersImageVulnerabilitiesQuery, scanId, imageId, pageSize, data => data.ImagesVulnerabilities).ConfigureAwait(false);
+        }
+
+        private static void ValidateContainersScanAndImage(Guid scanId, string imageId)
+        {
+            if (scanId == Guid.Empty)
+                throw new ArgumentException("Scan id cannot be empty", nameof(scanId));
+
+            if (string.IsNullOrWhiteSpace(imageId))
+                throw new ArgumentException("Image id cannot be null or empty", nameof(imageId));
+        }
+
+        /// <summary>Walks a skip/take paged field until it is empty or every item (totalCount) was read.</summary>
+        private async Task<List<TItem>> GetContainersPagedAsync<TData, TItem>(
+            string query, Guid scanId, string imageId, int pageSize, Func<TData, ContainersPage<TItem>> selectPage)
+            where TData : class
+        {
+            if (scanId == Guid.Empty)
+                throw new ArgumentException("Scan id cannot be empty", nameof(scanId));
+
+            if (pageSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+            var items = new List<TItem>();
+            int skip = 0;
+
+            while (true)
+            {
+                var variables = new Dictionary<string, object> { ["s"] = scanId, ["skip"] = skip, ["take"] = pageSize };
+                if (imageId != null)
+                    variables["i"] = imageId;
+
+                var page = selectPage(await ExecuteContainersQueryAsync<TData>(query, variables).ConfigureAwait(false));
+
+                if (page?.Items == null || page.Items.Count == 0)
+                    break;
+
+                items.AddRange(page.Items);
+                skip += page.Items.Count;
+
+                if (skip >= page.TotalCount)
+                    break;
+            }
+
+            return items;
+        }
+
+        /// <summary>
+        /// Posts a query to the Container Security endpoint and returns its "data". GraphQL answers HTTP 200 even when the
+        /// query fails, so the "errors" of the answer are turned into an exception too.
+        /// </summary>
+        private async Task<TData> ExecuteContainersQueryAsync<TData>(string query, IDictionary<string, object> variables)
+            where TData : class
+        {
+            string body = JsonConvert.SerializeObject(new { query, variables });
+
+            // A new request per attempt: the retry policy sends it again and a request message cannot be sent twice.
+            var response = await _retryPolicy.ExecuteAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, ContainersBaseUrl)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                };
+                request.Headers.TryAddWithoutValidation("Accept", "application/json; version=1.0");
+
+                return _httpClient.SendAsync(request);
+            }).ConfigureAwait(false);
+
+            using (response)
+            {
+                string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
+                    throw new HttpRequestException($"Container Security GraphQL request failed with status code {(int)response.StatusCode} {response.StatusCode}: {responseBody}");
+
+                var result = JsonConvert.DeserializeObject<ContainersGraphQLResponse<TData>>(responseBody);
+
+                if (result?.Errors != null && result.Errors.Count > 0)
+                    throw new HttpRequestException($"Container Security GraphQL error: {string.Join("; ", result.Errors.Select(x => x.Message))}");
+
+                return result?.Data ?? throw new HttpRequestException($"Container Security GraphQL answered without data: {responseBody}");
+            }
+        }
+
+        #endregion
 
         protected struct ObjectResponseResult<T>
         {

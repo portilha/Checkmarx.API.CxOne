@@ -284,7 +284,9 @@ namespace Checkmarx.API.AST
             get
             {
                 if (Connected && _graphql == null)
-                    _graphql = new GraphQLClient($"{ASTServer.AbsoluteUri}api/sca/graphql/graphql", _httpClient);
+                    _graphql = new GraphQLClient(_httpClient,
+                        $"{ASTServer.AbsoluteUri}api/sca/graphql/graphql",
+                        $"{ASTServer.AbsoluteUri}api/containers/buffet/graphql");
 
                 return _graphql;
             }
